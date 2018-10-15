@@ -1,0 +1,575 @@
+---
+title: "Experiment 2b check BDV data"
+author: "Z Sha"
+date: "16 April 2018"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+if(Sys.info()["nodename"] == "IT034844"){
+  ## BS
+  wd <- "C:/ZSwork/"
+  dd <- "Z:/"
+}else if(Sys.info()["nodename"] == "IT064613"){
+  ## Maths
+  wd <-"/home/zs16444/coding/"
+  dd <-"/home/zs16444/globalmass/"
+}else{
+  ## server  
+  wd <- "~/"
+  dd <- "/./projects/GlobalMass/"
+}
+
+
+
+library(rgdal); library(sp);library(GEOmap)
+library(INLA)
+library(ncdf4)
+source(paste0(wd,"gmrcode/BHM_sphere/functions.R"))
+source(paste0(wd, "gmrcode/BHM_sphere/partition_fun.R"))
+```
+
+# Introduction
+
+In the Experiment 2, our target is to separate the sea surface height change due to mass and steric based on the budget equation $$\Delta SSH = \Delta Mass + \Delta Steric + VLM$$
+and then produce a one degree prediction map for the mass change and steric change.
+
+The equation is only conceptual. Each components need to be converted in to the same unit: mm/yr; and the relationship is not linear additive when written in exact physcis formula. However, we have derived that the non-linear and interaction parts can be absorbed into the residuals for the purpose of this experiment and the physics equation for the pixel wise budget is simplified to 
+$$\Delta h \approx \frac{1}{a\rho_0} \Delta m + \frac{m_1}{a} (\frac{1}{\rho_2} - \frac{1}{\rho_1}) + vlm $$
+where $a$ is area of the pixel, $\rho_0 = 1000kg/m^3$ is the density of water, $\rho_2$ and $\rho_1$ are the densities for the start and end point of the period of interest, and $m_1$ is the mass of the pixel at the beginning. Thus, the first term on the right hand side (rhs) of the above equation corresponds to the SSH change due mass and we denote it by $\Delta h_m$. The second term corresponds to change due to steric and denote it by $\Delta h_s$. The last term is a constant value across the ocean, since the change of ocean bottom shape has effect on the entire sea level. Details can be found in the documentations for experiment 2 -- both ZS's and RB's. Then we can write 
+$$\Delta h = \Delta h_m + \Delta h_s + vlm$$
+For our experiment 2b, we assume $\Delta h_m$ and $\Delta h_s$ are two independent latent Gaussian spatial processes a priori. They can be approximated by GMRF through the SPDE approach. Then the sea surface height change $\Delta h$ can be reconstruct from the the above equation.
+
+
+For the observations, we have altimetry directly measuring the sea surface height and GRACE observing the mass change, therefore we can write 
+$$ y_{alt} = \Delta h_m + \Delta h_s + vlm + error_{alt} \\
+   y_{grace-gia} = \Delta h_m + error_{grace}$$
+   
+   
+The vlm will be calculated as GIA averaged over the ocean and the GIA values are given by the ICE6G-VM5 solution. 
+
+Thus the two latent processes can be separated from the above observation equations and the posterior of the two processes will be correlated due to the sum constraint. The posterior uncertainty of $\Delta h$ will be no larger than the sum of the two processes, since they will be negative correlated. (Find out how to calculated the marginal variance of this linear combination in INLA!)
+
+The GRACE data will be used to learn the mass change; but to better separate the mass and steric components, we need to impose some priors on the hyper-parameters for these two processes. For the mass change process, we assume the following prior: 
+$\rho \sim \log\mbox{Norm}(1600/6371, 1), \sigma^2 \sim \log\mbox{Norm}(40, 80^2)$. For the steric process, we assume $\rho \sim \log\mbox{Norm}(2000/6371, 1), \sigma^2 \sim \log\mbox{Norm}(15, 30^2)$. (***Need more discussion later for setting the prior***.)
+
+In the following we do the inference in INLA step by step.
+
+
+# Data 
+
+Load the pre-processed altimetry data, GRACE data, the ocean land mask and the ICE6G-VM5 data. The data are the linear year trend estimates over the period 2005-2015 with their corresponding estimated standard errors. 
+
+The Altimetry data used here is the CCI given by WL at 1 degree long-lat grid.
+
+We use BDV's GRACE equiarea data. The GIA signal has not been removed, so we use the ICE-6G GIA solution for the correction. The ICE-6G solution is converted to the unit of mm/yr in equivalent water height by BDV. 
+
+The ocean mask is downloaded from Nature Earth at 110m resolution. This will be used for calculating the Ocean areas separating the triangulations in the ocean and land.
+
+The ICE6G-VM5 data are trend of vertical land motions processed by MS and they are at 1 degree resolution. The data is used to calculated the effect of vlm averaged over the ocean.
+
+```{r loaddata, include = FALSE}
+## The altimetry data
+alt_nc <- nc_open(paste0(dd,"WP3-Ocean/BHMinputs/SSH/trend_SSH_CCI_200501_201512.nc"))
+lon <- ncvar_get(alt_nc, "lon")
+lat <- ncvar_get(alt_nc, "lat")
+trend_ssh <- ncvar_get(alt_nc, "trend_ssh") #note that there are NAs for land datat
+err_ssh <- ncvar_get(alt_nc, "err")
+alt_data <- data.frame(trend_ssh = as.numeric(trend_ssh), err_ssh = as.numeric(err_ssh))
+alt_data$lon <- rep(lon, 180) 
+alt_data$lat <- rep(lat, each = 360)
+alt_data2 <- na.omit(alt_data)
+alt_loc <- do.call(cbind, Lll2xyz(lon = alt_data2$lon, lat = alt_data2$lat))
+
+## Load BDV's GRACE data -- not the data are not evenly spaced!
+grace_nc <- nc_open(paste0(dd, "WP2-SolidEarth/Bramha/BHMinput/GRACE_trends_Oceanadded_Bramha.nc"))
+print(grace_nc)
+lon <- ncvar_get(grace_nc, "Long")
+lat <- ncvar_get(grace_nc, "Lat")
+trend_grace <- ncvar_get(grace_nc, "trend") #note that there are NAs for land datat
+err_grace <- ncvar_get(grace_nc, "uncert")
+
+grace_bdv <- data.frame(trend = as.numeric(trend_grace), std = as.numeric(err_grace), lon= lon, lat = lat)
+coordinates(grace_bdv) <- c("lon", "lat")
+
+## Load BDV's ICE6G-VM5 in ewh mm/yr
+gia_ewh <- read.table(paste0(dd, "WP2-SolidEarth/BHMinputs/GIA_BDV/GIA_ewh_ICE6G"), sep = ",", head = TRUE)
+gia_ewh$lat <- -gia_ewh$lat
+names(gia_ewh) <- c("lat", "lon", "trend")
+gia_ewh$trend <- gia_ewh$trend*1000
+
+
+## Load the Ocean polygon (-180, 180)
+Ocean <- readOGR(dsn = paste0(dd, "WP1-BHM/maps/ne_110m_ocean"), layer = "ne_110m_ocean")
+
+## The ICE6G-VM5 in vlm mm/yr
+ice6g_vlm <- read.table(paste0(dd, "WP2-SolidEarth/BHMinputs/GIA/GIA_Pel-6-VM5.txt"), header = T)
+names(ice6g_vlm)[2:3] <- c("lon", "lat")
+ice6g_vlm$lon <- ifelse(ice6g_vlm$lon >180, ice6g_vlm$lon - 360, ice6g_vlm$lon)
+coordinates(ice6g_vlm) <-c("lon", "lat")
+gridded(ice6g_vlm) <- TRUE
+proj4string(ice6g_vlm) <- CRS(proj4string(Ocean))
+ice6g_vlm$areas <- geosphere::areaPolygon(as(ice6g_vlm, "SpatialPolygons"))/(1000^2) # calculated the grid areas
+Oid <- unlist(over(Ocean, as(ice6g_vlm, "SpatialPoints"), returnList = T)) # Find the grid in Ocean
+vlm <- sum(ice6g_vlm$trend[Oid]*ice6g_vlm$areas[Oid]/sum(ice6g_vlm$areas[Oid])) # the average vlm in the ocean
+print(paste("The vlm adjustment is ", vlm, "mm/yr"))
+
+## Adjust the altimetry data by vlm
+alt_data2$trend_vlm <- alt_data2$trend_ssh - vlm
+```
+
+Now we do some sanity check on the GRACE and GIA data. First the GRACE and GIA data should both sum to zero. Then we remove the GIA signal from GRACe and check that also sum to zero.
+```{r grace_gia}
+## GRACE sum to zero -- equal area -- simple average
+mean(grace_bdv$trend)
+
+## GIA_ewh sum to zero
+gia_sp <- gia_ewh
+coordinates(gia_sp) <- c("lon", "lat")
+gridded(gia_sp) <- TRUE
+gia_sp$areas <- geosphere::areaPolygon(as(gia_sp, "SpatialPolygons"))/(1000^2)
+sum(gia_sp$trend*gia_sp$areas)/sum(gia_sp$areas)
+
+## Remove GIA from GRACE -- use grace - gia grid value which grace falls in
+proj4string(gia_sp)<- proj4string(grace_bdv) <- CRS("+proj=longlat")
+gridded(gia_sp) <- TRUE
+giaG <- over(grace_bdv, as(gia_sp, "SpatialPolygons"))
+grace_bdv$trendgia <- grace_bdv$trend - gia_sp$trend[giaG]
+mean(grace_bdv$trendgia)
+```
+
+# Set up priors
+
+Now we do some exploratory analysis which will be helpful in setting up the prior for hyper-parameters $\rho$ and $\sigma^2$ for the mass and steric processes.
+
+For the mass process, We learn the initial values from the variogram of the the GRACE data.
+
+For the steric process, we do not have direct observations, but we can coarsely learn the parameters from the residuals of altimetry minus GRACE.
+
+The following chunk plot the smoothed variograms. The variograms are calculated from 5000 random samples of the entire dataset and then replicated 5 times; using the entire dataset will take too much time for a standard office desktop or laptop. 
+
+```{r variogram, message = FALSE, cache = TRUE, echo = FALSE}
+## learn mass parameters from GRACE data
+v_grace <- gstat::variogram(trendgia ~ 1, data = grace_bdv)
+
+plot(v_grace)
+# -- the range is likely to be about 1500km 
+# -- the variance is likely to be around 15mm/yr
+
+## learn steric parameters from altimetry - grace - vlm
+## sample grace value for ssh
+steric_sp <- SpatialPoints(coords = cbind(alt_data$lon, alt_data$lat), proj4string = CRS(proj4string(grace_bdv)))
+gridded(steric_sp) <- TRUE
+G_trend <- over(grace_bdv, steric_sp)
+steric_learn <- na.omit(data.frame(lon = alt_data$lon[G_trend], lat = alt_data$lat[G_trend], trend = alt_data$trend_ssh[G_trend] - grace_bdv$trendgia - vlm))
+
+coordinates(steric_learn) <- c("lon", "lat")
+proj4string(steric_learn) <- CRS("+proj=longlat")
+v_steric <- gstat::variogram(trend ~ 1, data = steric_learn)
+plot(v_steric)
+# -- the range is likely to be 2000km
+# -- the variance is likely to be 8mm/yr
+```
+
+From the above variogram analysis, we set the prior means for the ranges and variances of the mass and steric processes.
+```{r prior}
+## Priors for mass
+mu_r1 <- 1500/6371 # mean of rho
+v_r1 <- 1 # vague variace for rho
+mu_s1 <- 15 # mean of sigma
+v_s1 <- 30^2 # vaue variance for sigma
+
+## Priors for steric
+mu_r2 <- 2000/6371 # mean of rho
+v_r2 <- 1 # vague variace for rho
+mu_s2 <- 8 # mean of sigma
+v_s2 <- 16^2 # vaue variance for sigma
+
+## Transform the parameters for a lognormal distribution
+## -- mass
+trho1 <- Tlognorm(mu_r1, v_r1)
+tsigma1 <- Tlognorm(mu_s1, v_s1)
+
+lsigma1 <- tsigma1[1]
+theta1_ss <- tsigma1[2]
+lrho1 <- trho1[1]
+theta1_rs <- trho1[2]
+lkappa1 <- log(8)/2 - lrho1
+ltau1 <- 0.5*log(1/(4*pi)) - lsigma1 - lkappa1
+
+## -- steric
+trho2 <- Tlognorm(mu_r2, v_r2)
+tsigma2 <- Tlognorm(mu_s2, v_s2)
+
+lsigma2 <- tsigma2[1]
+theta2_ss <- tsigma2[2]
+lrho2 <- trho2[1]
+theta2_rs <- trho2[2]
+lkappa2 <- log(8)/2 - lrho2
+ltau2 <- 0.5*log(1/(4*pi)) - lsigma2 - lkappa2
+```
+
+
+# Generate triangulations for the SPDE approximation 
+
+To build the spde model used for approximating the process, we need to generate a triangular mesh for the process. In general, the triangles in the mesh should have similar size and shape and the size of the triangles should be no larger than the spatial correlation length. 
+
+In our exploratory analysis, the correlation length is quite long, therefore if the purpose is estimating the hyper-parameters, then we can choose to have a sparse mesh with resolution no large than the correlation length. Here we could use say a triangle size to have approximately 5 degree resolution so that the edge length of the triangles are smaller than 500km on average which is much smaller than 2000km. 
+
+However, Since our purpose is to produce a map of the process at high resolution, we must have a mesh with at least the desired prediction resolution. For a 1 degree resolution map, we will need about $360 \times 180 = 64800$ triangles corresponding to number of vertices of $v \approx  (f+2)*2/5= 25921$. When using the Fibonacci grid points in long lat coordinates as the starting points for generating the mesh, the number of points is about half of the triangle vertices.
+
+```{r ssh_mesh}
+## Genereate Fibonacci points on the sphere
+fibo_points <- fiboSphere(N = 3e4, LL = FALSE)
+mesh0 <- inla.mesh.2d(loc = fibo_points, cutoff = 0.01, max.edge = 1)
+summary(mesh0)
+```
+
+The above triangulation can be used for the mass process; however since the steric process is only defined on the ocean, we need to remove the triangles in the land regions. 
+```{r ssh_mesh2}
+mesh0 <- dt.mesh.addon.posTri(mesh = mesh0, globe = TRUE) 
+Tlonlat <- Lxyz2ll(list(x = mesh0$posTri[,1], y = mesh0$posTri[,2], z = mesh0$posTri[,3]))
+mesh0$Trill <- cbind(lon = Tlonlat$lon, lat =Tlonlat$lat)
+TinOcean <- unlist(over(Ocean, SpatialPoints(coords=mesh0$Trill, proj4string = CRS(proj4string(Ocean))), returnList=T))
+TAll <- 1:mesh0$t
+ToutOcean <- TAll[-TinOcean]
+Omega = dt.Omega(list(TinOcean, 1:mesh0$t), mesh0)
+
+mesh_ocean <- mesh.sub(mesh0, Omega, 1)
+summary(mesh_ocean)
+```
+
+# Build SPDE approximation for the processes
+
+Now we can build the SPDE approximations for the two processes.
+
+```{r spde}
+mass_spde <- inla.spde2.matern(mesh0, B.tau = matrix(c(ltau1, -1, 1),1,3), B.kappa = matrix(c(lkappa1, 0, -1), 1,3),
+                              theta.prior.mean = c(0,0), theta.prior.prec = c(sqrt(1/theta1_ss), sqrt(1/theta1_rs)))
+
+steric_spde <- inla.spde2.matern(mesh_ocean, B.tau = matrix(c(ltau2, -1, 1),1,3), B.kappa = matrix(c(lkappa2, 0, -1), 1,3),
+                              theta.prior.mean = c(0,0), theta.prior.prec = c(sqrt(1/theta2_ss), sqrt(1/theta2_rs)))
+
+```
+
+
+# Link data to process and build stacks
+
+Now we link the data to the process. The data we have and the triangulation are about the same resolution, so we use point to point map here. Denote by $y_{grace}$ the grace observations for updating the mass process and $y_{altv}$ the altimetry observations (vlm adjusted) for the sum of mass and steric. Then the linear model can be stacked as
+$$\left(\begin{array}{c} 
+y_{grace} \\ 
+y_{altv}
+\end{array}\right) = \left(\begin{array}{cc} 
+A_{grace} & 0  \\ 
+A_{altv1} & A_{altv2}
+\end{array}\right) 
+\left(\begin{array}{c} 
+X_{mass} \\ 
+X_{steric} 
+\end{array}\right) + 
+\left(\begin{array}{c} 
+e_{grace} \\ 
+e_{altv}
+\end{array}\right)$$
+
+Similarly, we can still use the form $y = Ax + e$, with 
+$$y = (y_{grace}, y_{altv})^T, \; X = (X_{mass}, X_{steric})^T, \; e = (e_{grace}, e_{altv})^T\\
+A = \left(\begin{array}{cc} 
+A_{grace} & 0 \\ 
+A_{altv1} & A_{altv2}
+\end{array}\right)$$
+
+
+
+
+
+
+The following chunk builds the matrices and stacks for the above model.
+
+```{r link_data}
+## The data
+ygrace <- grace_bdv$trendgia
+yaltv<- alt_data2$trend_vlm
+
+## The A matrice for linking observation and processes
+
+## Link GRACE
+grace_loc <- do.call(cbind, Lll2xyz(lat = grace_bdv@coords[,2], lon = grace_bdv@coords[,1]))
+A_grace <- inla.spde.make.A(mesh = mesh0, loc = grace_loc)
+
+## Link Altimetry
+A_altv1 <- inla.spde.make.A(mesh = mesh0, loc = alt_loc)
+A_altv2 <- inla.spde.make.A(mesh = mesh_ocean, loc = alt_loc)
+
+## The A matrices for predict ssh
+A_grace2ocean <- inla.spde.make.A(mesh = mesh0, loc = mesh_ocean$loc)
+
+## The errors
+prec_scale <- c(1/grace_bdv$std^2, 1/alt_data2$err_ssh^2, rep(1, nrow(A_grace2ocean)))
+
+
+## Create the mass and steric stacks
+stkmass <- inla.stack(data = list(y=ygrace), A = list(A_grace),
+                     effects = list(mass = 1:mass_spde$n.spde), tag = "mass")
+
+stksteric <- inla.stack(data = list(y=yaltv), A = list(A_altv1, A_altv2),
+                     effects = list(list(mass = 1:mass_spde$n.spde),
+                                    list(steric = 1:steric_spde$n.spde)), tag = "steric")
+
+## Create the stack for predicting SSH
+stkssh <- inla.stack(data = list(y=NA), A = list(A_grace2ocean, 1),
+                     effects = list(list(mass = 1:mass_spde$n.spde),
+                                    list(steric = 1:steric_spde$n.spde)), tag = "ssh")
+## join the two stacks
+stkall <- inla.stack(stkmass, stksteric, stkssh)
+```
+
+
+# INLA inference
+
+Now we can run INLA for the Bayesian inference. Do not run on a desktop the process may use up to 64GB memory at peak. We ran this on a server with enough memory.
+
+```{r inla_run, include = TRUE, eval = FALSE}
+## Fix altimetry errors as they are known
+hyper <- list(prec = list(fixed = TRUE, initial = 0))
+
+## The formular -- we add the constraint that mass change sum to zero
+formula = y ~ -1 + f(mass, model = mass_spde, extraconstr = list(A = matrix(1, nrow = 1, ncol = mesh0$n), e = 0)) + 
+  f(steric, model = steric_spde)
+
+## Run INLA
+res_inla <- inla(formula, data = inla.stack.data(stkall), family = "gaussian",
+                 scale =prec_scale, control.family = list(hyper = hyper),
+                 control.predictor=list(A=inla.stack.A(stkall), compute =TRUE))
+```
+
+# Results
+
+## Assemble and save results
+
+Now assemble the inla inference and prediction results for the result from \code{formular2}.
+```{r inla_res, include = TRUE, eval = FALSE, echo = FALSE}
+## idices of the predicted processes
+mass_idx <- inla.stack.index(stkall, tag = "mass")$effects
+mass_idxg <- inla.stack.index(stkall, tag = "mass")$data
+steric_idx <- inla.stack.index(stkall, tag = "steric")$effects[-c(1:mass_spde$n.spde)]
+ssh_idx <- inla.stack.index(stkall, tag = "ssh")$data
+
+
+## Extract the predictions
+INLA_mass <- res_inla$summary.random$mass
+INLA_steric <- res_inla$summary.random$steric
+INLA_ssh <- res_inla$summary.linear.predictor[ssh_idx,]
+INLA_grace <- res_inla$summary.linear.predictor[mass_idxg,]
+
+## mass
+mass_mean <- INLA_mass$mean
+mass_u <- INLA_mass$sd
+proj <- inla.mesh.projector(mesh0, projection = "longlat", dims = c(360,180), xlim = c(0.5,359.5), ylim = c(-89.5, 89.5))
+mass_grid <- expand.grid(proj$x, proj$y)
+mass_pred <- data.frame(lon = mass_grid[,1], lat = mass_grid[,2],
+                       mean = as.vector(inla.mesh.project(proj, as.vector(mass_mean))),
+                       u = as.vector(inla.mesh.project(proj, as.vector(mass_u))))
+
+## mass at GRACE resolution
+grace_pred <- data.frame(mean = INLA_grace$mean, u = INLA_grace$sd)
+
+## steric
+steric_mean <- INLA_steric$mean
+steric_u <- INLA_steric$sd
+proj2 <- inla.mesh.projector(mesh_ocean, projection = "longlat", dims = c(360,180), xlim = c(0,359), ylim = c(-89.5, 89.5))
+steric_grid <- expand.grid(proj2$x, proj2$y)
+steric_pred <- data.frame(lon = steric_grid[,1], lat = steric_grid[,2],
+                       mean = as.vector(inla.mesh.project(proj2, as.vector(steric_mean))),
+                       u = as.vector(inla.mesh.project(proj2, as.vector(steric_u))))
+
+## ssh
+ssh_mean <- INLA_ssh$mean + vlm
+ssh_u <- INLA_ssh$sd
+ssh_pred <- data.frame(lon = steric_grid[,1], lat = steric_grid[,2],
+                       mean = as.vector(inla.mesh.project(proj2, as.vector(ssh_mean))),
+                       u = as.vector(inla.mesh.project(proj2, as.vector(ssh_u))))
+
+ress_2b_checkb <- list(res_inla = res_inla, st = stkall,
+                spde = list(mass = mass_spde, steric = steric_spde),  
+                mesh = list(mass = mesh0, steric = mesh_ocean), 
+                pred = list(mass = mass_pred, steric = steric_pred, ssh = ssh_pred, grace_pred = grace_pred))
+
+save(ress_2b_checkb, file = "/./projects/GlobalMass/WP1-BHM/Experiment2b/Exp2b_checkb.RData")
+
+```
+
+
+## Plot the posteriors of the hyper parameters
+
+```{r hyper, include=TRUE, echo = FALSE}
+load(paste0(dd, "WP1-BHM/Experiment2b/Exp2b_checkb.RData"))
+pars_mass <- marginal_par(res = ress_2b_checkb, process = "mass", plot = TRUE)
+pars_steric <- marginal_par(res = ress_2b_checkb, process = "steric", plot = TRUE)
+
+## The posterior modes
+print(paste("The estimated correlation length for mass is:", pars_mass$rho_mode*6371, "km", sep = " "))
+print(paste("The estimated marginal variance for mass is:", sqrt(pars_mass$sigma_mode), "mm/yr", sep = " "))
+
+print(paste("The estimated correlation length for steric is:", pars_steric$rho_mode*6371, "km", sep = "  "))
+print(paste("The estimated marginal variance for steric is:", sqrt(pars_steric$sigma_mode), "mm/yr", sep = "  "))
+
+```
+
+
+## Plot the predictions
+
+```{r predict, include=TRUE, echo = FALSE}
+steric_pred <- ress_2b_checkb$pred$steric
+steric_pred$mean2 <- ifelse(abs(steric_pred$mean) > 19, sign(steric_pred$mean)*20, steric_pred$mean)
+steric_pred$u2 <- ifelse(steric_pred$u > 3.8, 4, steric_pred$u)
+
+ssh_pred <- ress_2b_checkb$pred$ssh
+ssh_pred$mean2 <- ifelse(abs(ssh_pred$mean) > 19, sign(ssh_pred$mean)*20, ssh_pred$mean)
+ssh_pred$u2 <- ifelse(ssh_pred$u > 3.8, 4, ssh_pred$u)
+
+mass_pred <- ress_2b_checkb$pred$mass
+mass_pred$mean2 <- ifelse(abs(mass_pred$mean) > 19, sign(mass_pred$mean)*20, mass_pred$mean)
+mass_pred$u2 <- ifelse(mass_pred$u > 3.8, 4, mass_pred$u)
+coords <- cbind(mass_pred$lon, mass_pred$lat)
+mass_sp <- SpatialPoints(coords=coords, proj4string = CRS("+proj=longlat"))
+mass_spg <- points2grid(mass_sp)
+mass_pred$areas <- geosphere::areaPolygon(as(mass_spg, "SpatialPolygons"))/(1000^2)
+
+## plot the mass mean 
+lattice::levelplot(mean2 ~ lon + lat, data = mass_pred, aspect = "iso", at = seq(-20, 20, 2),
+                     panel = function(x,y,z,...){
+                       lattice::panel.fill(col = "grey")
+                       lattice::panel.levelplot(x,y,z,...)
+                       map2 <- map("world2", interior = FALSE, plot = FALSE)
+                       lattice::panel.xyplot(x=map2$x, y=map2$y, type = "l", col = "black")
+                     },
+                     main = "The predicted mass trend (mm/yr ewh)", xlab = "longitude", ylab = "latitude")
+
+## plot the mass uncertainty
+lattice::levelplot(u2 ~ lon + lat, data = mass_pred, aspect = "iso", at = seq(0, 4, 0.5),col.regions = topo.colors(10),
+                     panel = function(x,y,z,...){
+                       lattice::panel.fill(col = "grey")
+                       lattice::panel.levelplot(x,y,z,...)
+                       map2 <- map("world2", interior = FALSE, plot = FALSE)
+                       lattice::panel.xyplot(x=map2$x, y=map2$y, type = "l", col = "black")
+                     },
+                     main = "The predited mass uncertainties (mm/yr ewh)", xlab = "longitude", ylab = "latitude")
+
+## Plot the steric mean
+lattice::levelplot(mean2 ~ lon + lat, data = steric_pred, aspect = "iso", at = seq(-20, 20, 2),
+                     panel = function(x,y,z,...){
+                       lattice::panel.fill(col = "grey")
+                       lattice::panel.levelplot(x,y,z,...)
+                       map2 <- map("world2", interior = FALSE, plot = FALSE)
+                       lattice::panel.xyplot(x=map2$x, y=map2$y, type = "l", col = "black")
+                     },
+                     main = "The predicted steric trend (mm/yr)", xlab = "longitude", ylab = "latitude")
+
+## plot the steric uncertainty
+lattice::levelplot(u2 ~ lon + lat, data = steric_pred, aspect = "iso", at = seq(0, 4, 0.5),col.regions = topo.colors(10),
+                     panel = function(x,y,z,...){
+                       lattice::panel.fill(col = "grey")
+                       lattice::panel.levelplot(x,y,z,...)
+                       map2 <- map("world2", interior = FALSE, plot = FALSE)
+                       lattice::panel.xyplot(x=map2$x, y=map2$y, type = "l", col = "black")
+                     },
+                     main = "The predited steric uncertainties (mm/yr)", xlab = "longitude", ylab = "latitude")
+
+## plot the ssh mean 
+lattice::levelplot(mean2 ~ lon + lat, data = ssh_pred, aspect = "iso", at = seq(-20, 20, 2),
+                     panel = function(x,y,z,...){
+                       lattice::panel.fill(col = "grey")
+                       lattice::panel.levelplot(x,y,z,...)
+                       map2 <- map("world2", interior = FALSE, plot = FALSE)
+                       lattice::panel.xyplot(x=map2$x, y=map2$y, type = "l", col = "black")
+                     },
+                     main = "The predicted SSH trend (mm/yr)", xlab = "longitude", ylab = "latitude")
+
+## plot the ssh uncertainty
+lattice::levelplot(u2 ~ lon + lat, data = ssh_pred, aspect = "iso", at = seq(0, 4, 0.5),col.regions = topo.colors(10),
+                     panel = function(x,y,z,...){
+                       lattice::panel.fill(col = "grey")
+                       lattice::panel.levelplot(x,y,z,...)
+                       map2 <- map("world2", interior = FALSE, plot = FALSE)
+                       lattice::panel.xyplot(x=map2$x, y=map2$y, type = "l", col = "black")
+                     },
+                     main = "The predited SSH uncertainties (mm/yr)", xlab = "longitude", ylab = "latitude")
+
+## compare with grace
+grace_bdv$predm <- ress_2b_checkb$pred$grace_pred$mean
+grace_bdv$predu <- ress_2b_checkb$pred$grace_pred$u
+grace_bdv$diff <- ress_2b_checkb$pred$grace_pred[,1] - grace_bdv$trendgia
+grace_bdv$diff2  <- ifelse(abs(grace_bdv$diff) > 2, sign(grace_bdv$diff)*2.5, grace_bdv$diff )
+spplot(grace_bdv, "diff2")
+spplot(grace_bdv, c("predu", "std"))
+spplot(grace_bdv, c("predm", "trendgia"))
+
+grace_out <- grace_bdv@data[,c("predm", "predu", "trendgia")]
+grace_out$lon <- grace_bdv@coords[,1]
+grace_out$lat <- grace_bdv@coords[,2]
+write.table(grace_out, file = paste0(dd, "WP1-BHM/Experiment2b/outputs/exp2b_GRACE.txt"), row.names = FALSE)
+```
+
+
+## Sanity checks on the updated mass
+
+
+To check whether the updated mass is reasonable, we calculate the mass trend averaged over Earth sphere, ocean, and land.
+```{r globalmean, echo=FALSE}
+coords[,1] <- ifelse(coords[,1] > 180, coords[,1] - 360, coords[, 1])
+idxR <- unlist(over(Ocean, SpatialPoints(coords = coords, proj4string = CRS(proj4string(Ocean))), returnList = TRUE))
+eartharea <- sum(mass_pred$areas)
+oceanarea <-sum(mass_pred$areas[idxR])
+landarea <- sum(mass_pred$areas[-idxR])
+
+predsum <- sum(mass_pred$mean*mass_pred$areas)
+predocean <- sum(mass_pred$mean[idxR]*mass_pred$areas[idxR])
+predland <-sum(mass_pred$mean[-idxR]*mass_pred$areas[-idxR])
+```
+
+
+```{r oceanmean, echo = FALSE}
+cat("GRACE predicted trend mean over the corresponding regions: \n",
+    "\n",
+    "Regions       |", "SA sum to zero",    "\n",
+    "--------------------------------------- \n",
+    "Global        | ", predsum/eartharea,    "\n",
+    "Ocean         | ", predocean/oceanarea,     "\n",
+    "Land          |", predland/landarea,        "\n")
+
+```
+
+# Save the output as ncdf files
+
+```{r 2ncdf, include = FALSE, eval = FALSE}
+source(paste0(wd,"gmrcode/BHM_sphere/ncdfio.R"))
+
+## save mass
+df2ncdf(df = ress_2b_checkb$pred$mass, fname = paste0(dd, "WP1-BHM/Experiment2b/outputs/exp2b_mass_bdv.nc"),  
+        vars = list(c("mean", "trend", "BHM predicted mass trend", "mm/yr"), 
+             c("u", "uncertainty", "uncertainty of the BHM prediction", "mm/yr")),
+        title = "BHM-predicted mass", 
+        append = FALSE)
+
+## save steric
+df2ncdf(df = ress_2b_checkb$pred$steric, fname = paste0(dd, "WP1-BHM/Experiment2b/outputs/exp2b_steric_bdv.nc"),  
+        vars = list(c("mean", "trend", "BHM predicted steric trend", "mm/yr"), 
+             c("u", "uncertainty", "uncertainty of the BHM prediction", "mm/yr")),
+        title = "BHM-predicted steric", 
+        append = FALSE)
+
+## save SSH
+df2ncdf(df = ress_2b_checkb$pred$ssh, fname = paste0(dd, "WP1-BHM/Experiment2b/outputs/sexp2b_SSH_bdv.nc"),  
+        vars = list(c("mean", "trend", "BHM predicted SSH trend", "mm/yr"), 
+             c("u", "uncertainty", "uncertainty of the BHM prediction", "mm/yr")),
+        title = "BHM-predicted SSH", 
+        append = FALSE)
+```
+

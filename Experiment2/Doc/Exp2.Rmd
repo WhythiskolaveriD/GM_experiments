@@ -1,0 +1,154 @@
+---
+title: "Experiment 2 Solving Steric"
+author: "Z Sha"
+date: "27 Aug 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, eval = FALSE)
+```
+
+## Introduction
+
+In Experiment 2 we want to use GRACE and Altimetry data to update the mass and steric processes. 
+
+### Model setting 
+
+*  ssh ~ mass + steric, linked to altimetry
+
+*  mass: non-stationary GP on entire earth surface, linked to GRACE (minus fixed GIA), sum to zero
+
+*  steric: stationary GP on entire ocean surface
+
+### Data
+
+* GRACE masscons (GSFC/JPL/BDV's Spheric Harmonics)
+  
+    * GSFC: GRACE_trends_Oceanadded_Bramha.nc, 
+    * JPL : Prelim version of the data is available on RDSF, but need to be confirmed by BDV for final use.
+    * BDV's SH : TBC
+
+* GIA correction on GRACE: rdsf\WP3-Ocean\BHMinputs\GIA\ice6g_grace_mmyr_fromSphHarBdV.txt
+
+* GRACE catchment region: Brahma's catchment region for land, Maike's super mascons for ocean, Steve's Greenland masks
+
+* Altimetry: rdsf\WP3-Ocean\BHMinputs\SSH\trend_SSH_CCI_spatialGIA_OBD_2005_2015.nc
+
+
+## Scenario 1: GRACE GSFC masscons
+
+Before running R on the server, make sure you have loaded the gdal module by  ``module load /opt/modulefiles/gdal-2.2.3-x86_64``
+
+Then run R and do the following setups and set the experiment name.
+
+```{r expname}
+wd_root <- "~/GM_experiments/" # this is the experiments folder path
+wd_script <- "~/GM_experiments/Experiment2/Rscript/" # this is where the Rscripts are
+dd_root <- "/./projects/GlobalMass/" # this is where you have the rdsf path
+dd_save <- "/./projects/GlobalMass/WP1-BHM/Experiment2/" # This is where you save the results
+ 
+library(rgdal); library(sp);library(GEOmap)
+library(INLA)
+library(ncdf4)
+source(paste0(wd_root,"gmrcode/BHM_sphere/functions.R"))
+source(paste0(wd_root, "gmrcode/BHM_sphere/partition_fun.R"))
+
+expname <- "Exp2_GSFCgrid"
+errorname <- "inflate"
+filename <- paste0(expname, "_", errorname)
+```
+
+### Load and process data
+
+```{r S1_data}
+source(paste0(wd_script, "preprocessing/", expname, "_data.R"))
+```
+
+### Generate mesh and SPDE
+
+```{r S1_SPDE}
+source(paste0(wd_script, "run_model/", expname, "_SPDE.R"))
+```
+
+### Link process to data
+
+
+```{r S1_stack}
+source(paste0(wd_script, "run_model/", expname, "_stacks.R"))
+```
+
+### INLA run the model
+
+```{r S1_inlarun}
+source(paste0(wd_script, "run_model/", expname, "_runINLA.R"))
+```
+
+### Results and save
+
+```{r S1_result}
+source(paste0(wd_script, "analyze_result/", expname,"_res.R"))
+```
+
+
+### View the results
+
+Use the codes in the following script to view and plot the results ``yourpath2experiments/Experiment2/Rscript/analyze_result/Exp2_plotres.R")``.
+
+
+
+## Scenario 2: GRACE GSFC catchment regions
+
+Change the experiment name to the one for catchment regions by ``expname <- "GSFCregion"``.
+
+Then follow the same steps as above. 
+
+***You will see that using the catchment region data in this experiment does not help the sources separate well!!! The mass signal got allocated to the steric!!! This is because when modelling mass as a single non-stationary process, the hyper parameters are more difficult to estimate than modelling mass as two indpendent processes (ocean mass + land mass), when using catchement region data.***
+
+Note that most part of the scripts for the catchment region data are the same as for the grid data, except for the "stacks" script that links the process to the data. The scripts are kept with different names for clarity.
+
+You can also play with the measurement errors by using the infaled GRACE error and GIA error by changing the ``prec_scale`` in the "runINLA" script but don't forget to change the error name. 
+
+Please find details of each step in the corresponding scripts.
+
+## Running the script on a server
+
+You can run all the code above by sourcing the file with corresponding experiment name. For example ``Exp2_GSFCgrid.R`` is the fo Experiment 2 using GSFC grid data. 
+
+If you want to extract all the code chunks in an Rmd file, you can run the following in R.
+
+```{r getcodes }
+knitr::purl("path2rmd/myrmd.Rmd")
+```
+
+By default, the output R script will be saved under the current working directory.
+
+### Atantis
+
+On Atlantis, you can simply source this file in R, or in the command line environment use
+
+```
+yourname@server $ R CMD BATCH --no-save --no-restore --slave mypath/myscript.R &
+```
+
+### BlueCrystal
+If you want to submit a job to the BlueCrystal, you need to create an executable txt file and run the above line. Below is a simple example of what you need in the file. More details about submitting jobs on BlueCrystal can be found on the University IT page.
+
+```
+#!/bin/bash
+#PBS -l nodes=1:ppn=4,walltime=30:00:00  
+
+#! Load R and other modules (before that you need to install all the required packages)
+#! xx is the version you need
+module load path2R/R-3.x.x 
+module load path2c/gcc/64/x.x.x
+modele load path2gdal/gdal.x.x.x
+
+#! change the working directory (default is home directory)
+cd "/path2script"
+
+#! Run the R script
+R CMD BATCH --no-save --no-restore --slave myscript.R &
+
+```
+

@@ -1,0 +1,90 @@
+---
+title: "Experiment 2 documentation"
+author: "Z Sha"
+date: "12 October 2017"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+---
+
+# Introduction
+In this experiment, we try to decompose the change in sea surface height into three major components: change in ocean floor, change in ocean mass and ocean steric change. Each of these changes represents an unobserved latent process. Then we link these process to data sets that they contribute to. We have altimetry data for sea surface height and ocean mass from GRACE. GIA is constrained by a physical model solution as prior mean. There is no data or prior linked to the steric change but it is constrained by the change balance. Below shows an illustration of the framework.
+
+We assume all processes are converted to the same unit mm/year of water equivalence; hence the data need to be processed into the same format. For the moment, we assume the changes are time invariant and they are represented by trends over the period 2005 - 2015 and therefore the data are processed into trend estiamtes with corresponding standard errors of the estimates as the measuremnt errors. Another issue is that data and processes are not in the same spatial unit and we need to link them according to our knowledge of the physics and engineering of the data products.
+
+In the following, we first define the Bayesian hierarchical model for this experiment formally. Then we demonstrate the estimation procedure step by step.
+
+# The Bayesian hierarchical model
+Now we formally write down the BHM and the related assumptions. Denote the latent processes we want to solve by the following: $X_{ssh}$ for change in sea surface hight, $X_{GIA}$ for GIA, $X_{mass}$ for hight change due to mass change in the ocean and $X_{steric}$ for the hight change due to steric change. Then for the data, denote the altimetry trend by $Y_{alt}$ with measurement error $\varepsilon_{alt}$ and the GRACE data by $Y_{GRACE}$ with measurement error$\varepsilon_{GRACE}$. Denote the GIA foward model solution by $m_{GIA}$. 
+
+## Data
+### Link altimetry to SSH
+The altimetry is provided as gridded data at 1 degree resolution. We assume these altimetry values are the average of the grid and every point within the grid has the same value and therefore use a point to point map for altimetry and SSH
+$$
+Y_{alt} = \mathcal{A}_{ssh}X_{ssh} + \varepsilon_{alt}
+$$
+where $A_{ssh}$ is a linear operator that maps the SSH value to an altimery grid where it falls in.
+
+### Link GRACE to mass change
+The GRACE data are provided as agrregation over large polygon grids, hence we assume a map that integrates $X_{mass}$ values over the same polygon of the GRACE to produce the data. For the GRACE data $Y_{GRACE}(i)$ at a given polygon $\Delta_i$, we have
+$$
+Y_{GRACE}(i) = \left(\int_{\Delta_i}X_{mass}(s) \,\mathrm{d} s\right) + \varepsilon_{GRACE}(i)
+$$
+A more general and covenient representation is to write the integration as a linear operation. Denote by $\mathcal{A}_i$ the linear operator on $\Delta_i$, Then the above equation can be written as
+$$
+Y_{GRACE}(i) = \mathcal{A}_{mass,i}X_{mass} + \varepsilon_{GRACE}(i)
+$$
+And for all GRACE data in a vector form, we have
+$$
+Y_{GRACE} = \mathcal{A}_{mass}X_{mass} + \varepsilon_{GRACE}
+$$
+In practice, processes are approximated by GMRF on a given triangulation, the linear operator $A_i$ sum up the average values of the triangle vertices times their areas. Some processing functions need to written to find the centroid of the tiangle, the area of the triangle when it is completely inside the GRACE polygon; otherwise take the intersection.
+
+## Process
+For all these process we assume they are stationary Gaussian processes with Mat\'{e}rn covariance functions over all the oceans. And we use the following notations for modelling
+$$
+X_{ssh} \sim \mathcal{GP}(\mu_{ssh}, K(\theta_{ssh}) )\\
+X_{GIA} \sim \mathcal{GP}(\mu_{GIA}, K(\theta_{GIA}) ) \\
+X_{mass} \sim \mathcal{GP}(\mu_{mass}, K(\theta_{mass}) )\\
+X_{steric} \sim \mathcal{GP}(\mu_{steric}, K(\theta_{steric}))
+$$
+where the $\mu$s are the means of the processes and the $\theta$s are the hyper-parameters in the covariance functions.
+
+## Priors
+
+### measurement errors
+The measrument errors are all assumed to be indepedent Gaussian noises. The variances of the Gaussian distributions are given by the standard errors of the trend estimates.
+
+### Means
+For SSH, mass and steric we assume the means are all zero: SSh and mass mean can be updated from the data, steric is regarded as residuals. The GIA signals are usually well represented by the GIA forward models although with modelling errors; therefore we set $\mu_{GIA} = m_{GIA}$.
+
+### Hyper-parameters in the covariance
+The parameters in the covariance function define the spatial charactersitics of the processes. One way to specify these parameters is to set them as fixed values learned from existing studies. Another way is to set vague priors on the values of these parameters. In practice, we combine both to make the computation feasible. In general, we set the priors all to be log normal distributions with mean equal to some sensible values and variance very large.
+
+### 2.4 Final BHM all together
+Write all the assuptions and modelling togther, we have the BHM as
+
+$$
+Y_{alt}|X_{ssh} \sim \mathcal{N}(A_{ssh}X_{ssh},  V_A)\\
+Y_{GRACE}| X_{mass} \sim \mathcal{N} (\mathcal{A}_{mass}X_{mass} , V_{G})\\
+X_{steric} = X_{ssh} - X_{GIA} - X_{mass} \\
+X_{ssh} \sim \mathcal{GP}(0, K(\theta_{ssh}) )\\
+X_{mass} \sim \mathcal{GP}(0, K(\theta_{mass}) )\\
+X_{GIA} \sim \mathcal{GP}(m_{GIA}, K(\theta_{GIA}) ) \\
+\theta \sim \mbox{Log}\mathcal{N} (\mu_{\theta}, \sigma_{\theta}^2)
+$$
+
+where $V_A$ and $V_G$ are the variance matrix for the Altimetry and GRACE measurement errors. Note here we have two data sets and one physical constraints to solve this system, hence we need at least one set of strong prior for the process hyper-parameters so that the model is identifiable. 
+
+
+# Implementation 
+
+Now we consider the process on ocean only. We implement the model through 3 stages:
+
+(1) [Experiment 2a]() Assume GIA is known (ICE-6G solution) and the GRACE observations are purely mass change;
+
+(2) [Experiment 2b]() GIA is updated by GPS data; 
+
+(3) [Experiment 2c]() GIA is updated by GPS and GRACE data.

@@ -1,0 +1,230 @@
+---
+title: "Non-stationary test"
+author: "Zhe Sha"
+date: "19 July 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r loadfun}
+library(sp)
+library(INLA)
+library(rgeos)
+library(fields)
+library(rgdal) 
+```
+
+## Simulate Non-stationary process
+
+First generete the mesh and separate it into two regions.
+```{r eg.partition}
+set.seed(18)
+## Define the regions
+loc.bnd <- matrix(c(0,0, 5,0, 5,5, 0,5), 4, 2, byrow=TRUE)
+segm.bnd <- inla.mesh.segment(loc.bnd)
+out.Poly <- SpatialPolygons(list(Polygons(list(Polygon(loc.bnd)), ID = "out")))
+loc.int <- matrix(c(0.87,0.27, 0.13,0.13, 0.5,0.35, 0.07,0.97, 
+                    0.18,0.92, 0.31,0.32), byrow=T, 6, 2)*2 + 1.5
+int.bound <- inla.nonconvex.hull(loc.int, convex=0.6)
+int.Poly <- SpatialPolygons(list(Polygons(list(Polygon(int.bound$loc)), ID = "in")))
+locPoly <- spsample(as(int.Poly, "SpatialLines"), n = 100, type = "regular")
+segm.int <- inla.mesh.segment(locPoly)
+
+## Sample dense and evenly spaced points in the entrie region
+loc0 <- spsample(out.Poly, n = 500, type = "hexagonal", offset = c(0, 0))
+## Remove points in the inner polygon
+loc0in <- which(over(loc0, int.Poly) ==1)
+loc0out <- loc0[-loc0in, ]
+## Sample sparse and evenly spaced points in the inner polygon
+loc1 <- spsample(int.Poly, n = 400, type = "hexagonal", offset = c(0, 0))
+
+## combine in and out
+locs <- rbind(loc0, loc1)
+## Triangulation for the entire regions
+mesh <- inla.mesh.2d(loc = locs, boundary = segm.bnd, 
+                       interior = list(segm.int), offset = c(0.5,0.5),
+                      cutoff = 0.05, max.edge = 0.5)
+plot(mesh, asp =1)
+
+## group the vertices
+vsp <- SpatialPoints(mesh$loc[, 1:2])
+Omega1 <- which(over(vsp, out.Poly) == 1)
+Omega2 <- which(over(vsp, int.Poly) == 1)
+boundsoutline <- as(out.Poly, "SpatialLines")
+boundsout <- which(over(vsp, boundsoutline) == 1)
+boundsin <- mesh$idx$segm
+
+vOmega1 <- setdiff(setdiff(setdiff(Omega1, Omega2), boundsin),boundsout)
+vOmega2 <- setdiff(Omega2, boundsin)
+vboundsin <- boundsin[-c(1:4)]
+vboundsout <- boundsout
+vout <- which(is.na(over(vsp, out.Poly)))
+
+## plot the points colored by group
+plot(mesh, asp = 1)
+points(vsp[vOmega1,], col = "blue")
+points(vsp[vOmega2,], col = "red")
+points(vsp[vboundsin,], pch = 19)
+points(vsp[vboundsout,], pch = 19)
+points(vsp[vout,], pch = 19, col = "blue")
+```
+
+Now based on the lable of the vertices, we build the weights for the non-stationary parameters 
+
+```{r spdepars}
+lsigma1 <- log(0.5)
+lrho1 <- log(1)
+lkappa1 <- log(8)/2 - lrho1
+ltau1 <- 0.5*log(1/(4*pi)) - lsigma1 - lkappa1
+
+lsigma2 <- log(5)
+lrho2 <- log(0.2)
+lkappa2 <- log(8)/2 - lrho2
+ltau2 <- 0.5*log(1/(4*pi)) - lsigma2 - lkappa2
+
+## define basis function for tau
+nv <- nrow(mesh$loc)
+np <- 5
+Btmat <- matrix(0, nrow = np, ncol = nv)
+## Omega1
+bt1 <- c(ltau1, -1, 1, 0, 0)
+## Omega2
+bt2 <- c(ltau2, 0, 0, -1, 1)
+## boundin
+btb <- (bt1 + bt2)/2
+Btmat[,c(vOmega1, vboundsout, vout)] <- bt1
+Btmat[,vOmega2] <- bt2
+Btmat[,vboundsin] <- btb
+Btmat <- t(Btmat)
+
+## define basis function for kappa
+Bkmat <- matrix(0, nrow = np, ncol = nv)
+## Omega1
+bk1 <- c(lkappa1, 0, -1, 0, 0)
+## Omega2
+bk2 <- c(lkappa2, 0, 0, 0, -1)
+## boundin
+bkb <- (bk1 + bk2)/2
+Bkmat[,c(vOmega1, vboundsout, vout)] <- bk1
+Bkmat[,vOmega2] <- bk2
+Bkmat[,vboundsin] <- bkb
+Bkmat <- t(Bkmat)
+
+## Stationary spde
+spde0 <- inla.spde2.matern(mesh, 
+                           B.tau = matrix(c(ltau1, -1, 1), 1, 3), 
+                           B.kappa = matrix(c(lkappa1, 0, -1), 1,3),
+                           theta.prior.mean = c(0,0), 
+                           theta.prior.prec = c(1,1))
+## Non-stationary spde
+spde1 <- inla.spde2.matern(mesh, 
+                           B.tau = Btmat, 
+                           B.kappa =Bkmat,
+                           theta.prior.mean = c(0,0,0,0), 
+                           theta.prior.prec = c(1,1,1,1))
+
+## Check the covariance structure
+Q0 <- inla.spde.precision(spde0, c(0,0))
+Q1 <- inla.spde.precision(spde1, c(0,0,0,0))
+mvar0 <- sqrt(diag(inla.qinv(Q0)))
+mvar1 <- sqrt(diag(inla.qinv(Q1)))
+
+proj <- inla.mesh.projector(mesh, dims = c(100,100))
+
+image.plot(proj$x, proj$y, inla.mesh.project(proj, as.vector(mvar0)), 
+             col = topo.colors(24),
+              xlab = "", ylab="", asp = 1)
+
+image.plot(proj$x, proj$y, inla.mesh.project(proj, as.vector(mvar1)), 
+             col = topo.colors(24),
+              xlab = "", ylab="", asp = 1)
+
+
+## Check simulated sample
+xsamp <- rnorm(nrow(Q0))
+Q0_chol <- chol(Q0)
+Q1_chol <- chol(Q1)
+tsamp0 <- as.vector(solve(t(Q0_chol), xsamp))
+tsamp1 <- as.vector(solve(t(Q1_chol), xsamp))
+
+
+image.plot(proj$x, proj$y, inla.mesh.project(proj, as.vector(tsamp0)), 
+             col = topo.colors(24),
+              xlab = "", ylab="", asp = 1)
+
+image.plot(proj$x, proj$y, inla.mesh.project(proj, as.vector(tsamp1)), 
+             col = topo.colors(24),
+              xlab = "", ylab="", asp = 1)
+
+```
+
+
+## Inference on the non-stationary process 
+
+The non-stationary construction looks all right. Next we try to infer the parameters and do posterior pridiction using simulated data.
+
+First, we simulate the data for inference. We use the same SPDE as above but with different parameter values.
+```{r simdata}
+set.seed(10)
+Qsim <- Q1 <- inla.spde.precision(spde1, c(0.5,0.2,-1,-0.1))
+sampsim <- inla.qsample(1, Qsim)
+
+dataloc <- expand.grid(proj$x, proj$y)
+datapro <- inla.mesh.project(proj, as.vector(sampsim))
+image.plot(proj$x, proj$y,datapro, 
+             col = topo.colors(24),
+              xlab = "", ylab="", asp = 1)
+
+datasim <- data.frame(x=dataloc$Var1,  y = dataloc$Var2, z = as.vector(datapro))
+datasim <- subset(datasim, x>=0 & x<=5 & y >=0 & y <=5)
+
+```
+
+Nest build the INLA model for the inference.
+```{r inlainf}
+data_loc <- as.matrix(datasim[,1:2])
+obs <- datasim$z
+  
+Ay <- inla.spde.make.A(mesh = mesh, loc = data_loc)
+st.est <- inla.stack(data = list(y=obs), A = list(Ay),
+                     effects = list(process = 1:spde1$n.spde), tag = "est")
+  
+hyper <- list(prec = list(fixed = TRUE, initial = log(1)))
+formula = y ~ -1 + f(process, model = spde1)
+prec_scale <- 1/(0.001^2)
+  
+res_inla <- inla(formula, data = inla.stack.data(st.est, spde = spde1), family = "gaussian",
+                  scale = prec_scale, control.family = list(hyper = hyper),
+                   control.predictor=list(A=inla.stack.A(st.est), compute =TRUE))
+
+res_pars <- inla.spde2.result(res_inla, "process", spde1, do.transf=TRUE)
+
+## Plot the range 
+plot(res_pars$marginals.range.nominal[[vOmega1[1]]], type = "l", main = "range 1")
+plot(res_pars$marginals.range.nominal[[vOmega2[1]]], type = "l", main = "range 2")
+plot(res_pars$marginals.range.nominal[[vboundsin[1]]], type = "l", main = "range boundary")
+ 
+## Plot the variance
+plot(res_pars$marginals.variance.nominal[[vOmega1[1]]], type = "l", main = "variance 1")
+plot(res_pars$marginals.variance.nominal[[vOmega2[1]]], type = "l", main = "variance 2")
+plot(res_pars$marginals.variance.nominal[[vboundsin[1]]], type = "l", main = "variance boundary")
+ 
+```
+
+The parameter looks all right. We also plot the posterior predictions.
+```{r plotpost}
+mean_post <- res_inla$summary.random$process$mean
+sd_post <- res_inla$summary.random$process$sd
+
+image.plot(proj$x, proj$y, inla.mesh.project(proj, as.vector(mean_post)), 
+             col = topo.colors(24),
+              xlab = "", ylab="", asp = 1)
+
+image.plot(proj$x, proj$y, datapro, 
+             col = topo.colors(24),
+              xlab = "", ylab="", asp = 1)
+```
+

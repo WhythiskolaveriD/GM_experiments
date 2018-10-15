@@ -1,0 +1,9 @@
+## In the cmd use the following to ls smb files
+smbclient //rdsfcifs.acrc.bris.ac.uk/globalmass/
+## To exit
+type exit in smb:>
+
+## To use the shared folder locally you need to mount the folder to a local share folder
+## But need to be root and also need to know groupid... not use
+mount -t cifs //rdsfcifs.acrc.bris.ac.uk/globalmass/ ~/rdfs_globalmass
+

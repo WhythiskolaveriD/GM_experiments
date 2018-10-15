@@ -1,0 +1,159 @@
+---
+title: "Visualize uncertainty"
+author: "Z Sha"
+date: "29 September 2017"
+output:
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+In this document, we explore the visualization of uncertainties for the global GIA.
+
+## Load the data and functions
+
+```{r load}
+load("Z:/WP1-BHM/Experiment1b/GIA_RGL/res1.RData")
+library(ggplot2)
+library(grid)
+library(gridExtra)
+library(mapproj)
+
+GPS_pred1 <- res1$GPS_pred
+GIA_pred1 <- res1$GIA_pred
+```
+
+
+## Method I: Uncertainty Disks
+The uncertainties are represented by colored disks at grid points. The disk size is proprotional to $1/u$, where $u$ is the uncerternty and the color is defined by the predicted mean.
+
+```{r method1}
+## Wrapper for plotting
+plotU1 <- function(data, colpal, limits=NULL, title, resize = 0.001, zoomin = NULL){
+  if(is.null(zoomin)){
+    lon1 <- 0
+    lon2 <- 360
+    lat1 <- -90
+    lat2 <- 90
+    zoom_data <- data
+    }else{
+      lon1 <- zoomin$lon[1]
+      lon2 <- zoomin$lon[2]
+      lat1 <- zoomin$lat[1]
+      lat2 <- zoomin$lat[2]
+      zoom_data <- subset(data, lon > lon1 & lon < lon2 & lat > lat1 & lat < lat2)
+    }
+  
+  beauty <- 
+    theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), 
+          panel.background = element_rect(fill = "white", colour = 'white'), 
+          legend.text = element_text(size = 10),
+          legend.title = element_text(size = 10), 
+          axis.text = element_text(size = 10),
+          axis.title = element_text(size = 10),
+          axis.line = element_line(size = 1),
+          plot.title = element_text(hjust = 0.5, size = 15),
+          plot.subtitle = element_text(hjust = 0.5, size = 10),
+          panel.border = element_blank())
+  world_map <- map_data("world2")
+  baseworld <- geom_polygon(data = world_map, aes(x=long, y=lat, group=group), colour="black", fill = NA, alpha = 0.8)  
+  colbar <- guide_colorbar(barwidth = 2, barheight = 10, label.position = "right", title.position = "bottom")
+  
+  Map <- ggplot(zoom_data) + geom_point(aes(x = lon, y = lat, color = mean, size = 1/u * resize)) + coord_fixed() + 
+    xlab("Longitude") + ylab("Latitude") + 
+    scale_x_continuous(limits=c(lon1,lon2),  expand = c(0.01, 0.01)) + 
+    scale_y_continuous(limits=c(lat1,lat2),  expand = c(0, 0)) + 
+    scale_colour_gradientn(colors = colpal, name = "mm/yr", limits = limits,  guide = colbar) + 
+    scale_size_continuous(guide = FALSE)
+  
+  Map <- Map +  baseworld + ggtitle(title) + beauty
+  return(Map)
+}
+
+GIA_pred1s <- subset(GIA_pred1, lon %in% seq(0,359, 3))
+GIA_pred1s <- subset(GIA_pred1s, lat %in% seq(-90,90, 3))
+mapU1 <- plotU1(data = GIA_pred1s, colpal = colorRamps::matlab.like(12), title = "Uncertainty Disk map")
+mapU1
+
+mapU1 + coord_map(projection = "mollweide") + theme(axis.text = element_blank(),
+          axis.title = element_blank(),
+          axis.line = element_blank())
+```
+
+Zoom in near Greenland.
+```{r method1zoom}
+GIA_zoom <- plotU1(data = GIA_pred1, zoomin = list(lon = c(280, 350), lat = c(55, 90)), 
+                   colpal = colorRamps::matlab.like(12),  title = "Zoom in Greenland")
+GIA_zoom
+
+GIA_zoom + coord_map(projection = "mollweide") + theme(axis.text = element_blank(),
+          axis.title = element_blank(),
+          axis.line = element_blank())
+```
+
+
+## Method II: Adding uncertainty light
+The uncertainties are represented by adding transparent noises. So darker regions have higher uncertainties.
+
+```{r method2}
+## Wrapper for plotting
+plotU2 <- function(data, colpal, limits=NULL, title, zoomin = NULL){
+  if(is.null(zoomin)){
+    lon1 <- 0
+    lon2 <- 360
+    lat1 <- -90
+    lat2 <- 90
+    zoom_data <- data
+    }else{
+      lon1 <- zoomin$lon[1]
+      lon2 <- zoomin$lon[2]
+      lat1 <- zoomin$lat[1]
+      lat2 <- zoomin$lat[2]
+      zoom_data <- subset(data, lon > lon1 & lon < lon2 & lat > lat1 & lat < lat2)
+    }
+  
+  beauty <- 
+    theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), 
+          panel.background = element_rect(fill = "white", colour = 'white'), 
+          legend.text = element_text(size = 10),
+          legend.title = element_text(size = 10), 
+          axis.text = element_text(size = 10),
+          axis.title = element_text(size = 10),
+          axis.line = element_line(size = 1),
+          plot.title = element_text(hjust = 0.5, size = 15),
+          plot.subtitle = element_text(hjust = 0.5, size = 10),
+          panel.border = element_blank())
+  world_map <- map_data("world2")
+  baseworld <- geom_polygon(data = world_map, aes(x=long, y=lat, group=group), colour="black", fill = NA, alpha = 0.8)  
+  colbar <- guide_colorbar(barwidth = 2, barheight = 10, label.position = "right", title.position = "bottom")
+  
+  signs <- rbinom(nrow(zoom_data), size = 1, prob = 0.5)*2 -1
+  zoom_data$mnoisy <- zoom_data$mean + signs*2*zoom_data$u
+ 
+   Map <- ggplot(zoom_data) + geom_raster(aes(x = lon, y = lat, fill = mean)) + coord_fixed() + 
+    xlab("Longitude") + ylab("Latitude") + 
+    scale_x_continuous(limits=c(lon1,lon2),  expand = c(0.01, 0.01)) + 
+    scale_y_continuous(limits=c(lat1,lat2),  expand = c(0, 0)) + 
+    scale_fill_gradientn(colors = colpal, name = "mm/yr", limits = limits,  guide = colbar) 
+  Map <- Map + geom_raster(data = zoom_data, aes(x=lon, y=lat, alpha = u), fill = "black") +
+    scale_alpha_continuous(range = c(0, 0.5), guide = FALSE)
+  
+  Map <- Map +  baseworld + ggtitle(title) + beauty
+  return(Map)
+}
+
+mapU2 <- plotU2(data = GIA_pred1, colpal = colorRamps::matlab.like(12), limit = c(-8, 20), title = "Uncertainty light map")
+mapU2
+
+```
+
+Zoom in near Greenland.
+```{r method2zoom}
+GIA_zoom <- plotU2(data = GIA_pred1, zoomin = list(lon = c(280, 350), lat = c(55, 90)), 
+                   colpal = colorRamps::matlab.like(12),  limit = c(-8, 20), title = "Zoom in Greenland")
+GIA_zoom
+```

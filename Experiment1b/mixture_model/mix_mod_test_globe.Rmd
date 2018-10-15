@@ -1,0 +1,290 @@
+---
+title: "Test mixture model on the globe"
+author: "Z Sha"
+date: "26 October 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+***
+
+## 0 Introduction
+
+In this document, we test the mixture model on the globe. We use the land coastline as the boudary for the mixture Gaussian models. We assume the same Gaussian process on the land and another on the ocean.
+
+
+## 1 Define Polygons and Simulate data
+First we read in a low resolution coastline to separate the lands and oceans and then define the true process by a GMRF defined on the triangle mesh of a SPDE model.
+
+We need the following packages and extra functions from the sourced file.
+```{r init, include=TRUE, message = FALSE, warning=FALSE}
+## load libraries and source codes
+library(INLA); library(rgdal); library(maptools); library(GEOmap); library(rgl)
+source("c:/ZSwork/glbm/Experiment1b//mixture_model/BarrierModel/functions-barriers-dt-models-march2017.R")
+set.seed(18)
+```
+
+Load the coastline and define polygons.
+```{r polygons, include=TRUE}
+lands <- readOGR(dsn = "c:/ZSwork/glbm/Experiment2/ne_110m_land", layer = "ne_110m_land")
+## Remove tiny islands
+landsareas <- sapply(lands@polygons, function(x) slot(x, "area"))
+lands2 <- lands[landsareas > 10,]
+
+## Define the global polygons
+globe_p <- Polygon(coords = cbind(c(-180, -180, 180, 180, -180), c(-90, 90, 90, -90, -90)))
+
+## Define the ocean polygons by adding holes in the globe
+land_holes <- lapply(lands2@polygons, function(x) x@Polygons[[1]])
+land_holes <- lapply(land_holes, function(x) {x@hole <- TRUE;return(x)})
+land_holes[[length(land_holes) + 1]]  <- globe_p
+Ocean <- Polygons(land_holes, ID = "a")
+Ocean <- SpatialPolygons(list(Ocean), proj4string =CRS("+proj=longlat"))
+```
+
+Generate the point locations for building up the mesh. We want the mesh to be dense over the oceans and sparse on the lands.
+```{r points1, include = TRUE}
+## First create uniformly distributed points on the sphere -- Fibonacci Points
+#loc_sphere <- spsample(Ocean, n = 1000, type = "Fibonacci")
+## Could use spsample but there is a bug of coordinate translation so use my own Fibonacci code
+
+#### Generate Fibonacci points on the sphere
+fiboSphere2 <- function(N = 1000L, L0 = FALSE) {
+  ## Reference (note that points generated from 2D are slightly different from 3D)
+  ## Measurement of Areas on a Sphere Using Fibonacci and Latitude–Longitude Lattices (2010)
+  phi <- (sqrt(5) + 1) / 2 # golden ratio
+  ga <- phi * 2 * pi           # golden angle
+
+  i <- seq(-N, N)
+  P <- 2 * N + 1
+  lat <- asin(2*i / P) * 180 / pi
+  if(L0){
+  lon <- ((2 * pi * i / phi) %% pi) * 360 / pi
+  }else{
+    lon <- ((2 * pi * i / phi) %% pi) * 360 / pi - 180
+    }
+  cbind(lon = lon, lat = lat)
+}
+
+fibo_points <- fiboSphere2(N = 4000)
+## Remove points on the land
+pinocean <- unlist(over(Ocean, SpatialPoints(coords = fibo_points, proj4string = CRS("+proj=longlat")), returnList=T))
+fibo_inOceans <- fibo_points[pinocean,]
+plot(Ocean)
+points(fibo_inOceans, pch = ".")
+```
+
+Now generate sparse points on the land using the same trick.
+```{r points2, include = TRUE}
+fibo_points <- fiboSphere2(N = 500)
+
+## Find points on the land
+pinocean <- unlist(over(Ocean, SpatialPoints(coords = fibo_points, proj4string = CRS("+proj=longlat")), returnList=T))
+fibo_inLands <- fibo_points[-pinocean,]
+plot(Ocean)
+points(fibo_inLands, pch = "*", col = 2)
+points(fibo_inOceans, pch = ".")
+```
+
+Finally assmeble these points and define the coastlines to be interior lines.
+```{r points3, include = TRUE}
+## Combine the points
+mesh_points0 <- rbind(fibo_inOceans, fibo_inLands)
+## convert the longlat coordinates to xyz
+mesh_points0_xyz <- do.call(cbind, Lll2xyz(lat = mesh_points0[,2], lon = mesh_points0[,1]))
+
+## define the interior lies as the coastlines
+coast_seg <- inla.sp2segment(lands2)
+coast_xyz <- do.call(cbind, Lll2xyz(coast_seg$loc[,2], coast_seg$loc[,1])) # project longlat back to cartesian xyz
+coast_seg$loc <- coast_xyz
+## Now generate the initial mesh and plot
+mesh0 <- inla.mesh.2d(loc = mesh_points0_xyz, cutoff = 0.02, max.edge = 0.5)
+
+plot3d(coast_seg$loc, pch = "-", col = 2)
+plot(mesh0, rgl = T, add = TRUE)
+
+## Use these points to iterate and add in the coastline as interior lines
+mesh <- inla.mesh.2d(loc = mesh0$loc, interior= coast_seg , cutoff = 0.02, max.edge = 0.5)
+plot(mesh)
+```
+
+Plot the mesh and see check which triangles are inside the polygons
+```{r mesh2, include = TRUE}
+mesh = dt.mesh.addon.posTri(mesh, globe = TRUE)
+# - Add on mesh$posTri
+# - - contains the positions of the triangles
+
+## checking which mesh triangles are inside the land
+## First convert xyz to lonlat
+Tlonlat <- Lxyz2ll(list(x = mesh$posTri[,1], y = mesh$posTri[,2], z = mesh$posTri[,3]))
+mesh$Trill <- cbind(lon = Tlonlat$lon, lat =Tlonlat$lat)
+TinOcean <- unlist(over(Ocean, SpatialPoints(coords=mesh$Trill, proj4string = CRS("+proj=longlat")), returnList=T))
+TAll <- 1:mesh$t
+TinLand <- TAll[-TinOcean]
+Omega = dt.Omega(list(TinLand, 1:mesh$t), mesh)
+#Omega.SP = dt.polygon.omega(mesh, Omega, globe = TRUE, round = 2)
+## Plot the result in 3d
+plot(mesh, t.sub = Omega[[2]], col = "lightblue", rgl = TRUE )
+plot(mesh, t.sub = Omega[[1]], col = "yellow",  rgl = TRUE, add = TRUE)
+writeWebGL(dir = "~/glbm/Experiment1b/mixture_model/", 
+           filename= "~/glbm/Experiment1b/mixture_model/mixtureMesh.html",  # save the plot as an html
+           width = 600, reuse = TRUE)
+
+## Plot the result in 2d
+plot(mesh, t.sub = Omega[[2]], rgl = T)
+```
+
+Now use this mesh to build the model and simulate data.
+```{r simData, include = TRUE}
+## Create the precsion matrix function
+Q.function = dt.create.Q(mesh, Omega)
+ranges = c(5, 0.1)
+# - the first range is for the barrier area
+# - - it is not sensitive to the exact value here,
+# - the second range is for the normal area
+Q = Q.function(theta = c(log(1), log(ranges)))
+# - the precision matrix for fixed ranges
+
+## Simulate the field
+u = inla.qsample(n=1, Q=Q, seed = 2017)
+u = u[ ,1]
+
+## A wrapper for plotting the result
+local.plot.field = function(field, ...){
+  proj = inla.mesh.projector(mesh,  projection = "longlat", dims = c(360,180), xlim = c(-180, 180), ylim = c(-90, 90))
+  field.proj = inla.mesh.project(proj, field)
+  image.plot(list(x = proj$x, y=proj$y, z = field.proj),
+              ...)
+}
+
+## Plot the simulated field
+local.plot.field(u, main="The true (simulated) spatial field", asp = 1)
+plot(Ocean, add = TRUE)
+```
+
+Now sample observations. The real observations are usually all over the Ocean and the pseudo-observations are along the polygon boundaries.
+```{r observations1, include = TRUE}
+## sample points in the ocean
+obs_ocean <- spsample(Ocean, n = 2000, type = "random")
+
+## sample points on the polygon boundaries
+landslines <- as(lands2, 'SpatialLines') 
+obs_coast <- spsample(landslines, n = 200, type = "random") # not points more than specified
+
+proj4string(obs_coast) <- proj4string(obs_ocean)
+obs_all<- rbind(obs_ocean, obs_coast)
+plot(obs_all)
+obs_allxyz <- do.call(cbind, Lll2xyz(lat = obs_all@coords[,2], lon = obs_all@coords[,1]))
+
+A1.data = inla.spde.make.A(mesh, obs_allxyz)
+# - the projector matrix required for any spatial model
+# - this matrix can transform the field-defined-on-the-mesh 
+#   to the field-defined-on-the-data-locations
+
+u.data1 = A1.data %*% u
+# - project the field from the finite element  
+#   representation to the data locations
+df = data.frame(obs_allxyz) # - df is the dataframe used for modeling
+names(df) = c('locx', 'locy', 'locz')
+sigma.epsilon <- c(rep(0.2,2000), rep(0.05, length(obs_coast))) # - size of the iid noise in the Gaussian likelihood
+df$y = drop(u.data1 + sigma.epsilon*rnorm(nrow(df)))
+# - sample observations with gaussian noise
+
+summary(df)
+```
+
+## 2 Inference -- stationary
+```{r stationary, include=TRUE}
+stk1 <- inla.stack(data=list(y=df$y), A=list(A1.data),
+                  effects=list(s=1:mesh$n), 
+                  remove.unused = FALSE, tag='est')
+
+model.stat = inla.spde2.matern(mesh)
+# - Set up the model component for the spatial SPDE model: 
+#   Stationary Matern model
+# - I assume you are somewhat familiar with this model
+
+formula <- y ~ -1 + f(s, model=model.stat)
+# - Remove the default intercept
+# - - Having it in the stack instead improves the numerical 
+#     accuracy of the INLA algorithm
+# - Fixed effects + random effects
+
+hyper <- list(prec = list(fixed = TRUE, initial = log(1)))
+scales = 1/sigma.epsilon^2  
+  
+res.stationary <- inla(formula, data=inla.stack.data(stk1),
+            control.predictor=list(A = inla.stack.A(stk1)),
+            family = 'gaussian', scale = scales,
+            control.family = list(hyper = hyper))
+
+summary(res.stationary)
+res_pars <- inla.spde2.result(res.stationary, "s", model.stat, do.transf=TRUE)
+
+plot(res_pars$marginals.range.nominal[[1]], type = "l", main = "range")
+plot(res_pars$marginals.variance.nominal[[1]], type = "l", main = "variance")
+
+local.plot.field(res.stationary$summary.random$s$mean, asp =1, zlim = c(-25, 20),
+          main="Spatial estimate with the stationary model -- mean")
+plot(Ocean, add = TRUE)
+plot(obs_all, pch = ".", add = TRUE)
+local.plot.field(res.stationary$summary.random$s$sd, asp =1,  
+          main="Spatial estimate with the stationary model -- uncertainty")
+plot(Ocean, add = TRUE)
+
+```
+
+## 2 Inference -- mixture model
+```{r barrier, include = TRUE}
+Q.mixture = dt.create.Q(mesh, Omega, fixed.ranges = c(5, NA))
+# - We fix the barrier range to a different value than we 
+#   used for simulations
+# - - Why? It does not matter, as long as it is 'small' 
+#     the models are very
+#     similar
+# - - This shows that you do not need to know the 
+#     true 'barrier range'!
+
+log.prior = dt.create.prior.log.exp(prior.param = c(1,1))
+# - The prior parameters are the lambdas in the exponential 
+#   priors for standard deviation and inverse-range
+
+mixture.model = dt.inla.model(Q = Q.mixture, log.prior=log.prior)
+
+formula2 <- y ~ -1 + f(s, model=mixture.model)
+# - The spatial model component is different from before
+# - The rest of the model setup is the same! 
+#   (as in the stationary case)
+# - - e.g. the inla(...) call below is the same, 
+#     only this formula is different
+
+res.mixture = inla(formula2, data=inla.stack.data(stk1),
+       control.predictor=list(A = inla.stack.A(stk1)),
+       family = 'gaussian',
+       control.family = list(hyper = hyper),
+            scale = scales)
+
+summary(res.mixture)
+theta1 <- res.mixture$marginals.hyperpar$`Theta1 for s`
+theta2 <- res.mixture$marginals.hyperpar$`Theta2 for s`
+
+Vmar<- inla.tmarginal(exp, theta1)
+Rmar <- inla.tmarginal(exp, theta2)
+
+plot(Vmar, type = "l", main = "posterior varianace")
+plot(Rmar, type = "l", main = "posterior range")
+
+local.plot.field(res.mixture$summary.random$s$mean, asp = 1,zlim = c(-25, 20),
+                 main="Spatial posterior for mixture model -- mean")
+plot(Ocean, add = TRUE)
+plot(obs_all, pch = ".", add = TRUE)
+
+local.plot.field(res.mixture$summary.random$s$sd, asp = 1, 
+                 main="Spatial posterior for mixture model -- uncertainty")
+plot(Ocean, add = TRUE)
+plot(obs_all, pch = ".", add = TRUE)
+
+```

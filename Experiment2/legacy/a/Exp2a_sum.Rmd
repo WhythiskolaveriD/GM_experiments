@@ -1,0 +1,113 @@
+---
+title: "Experiment 2 -- Summary"
+author: "Z Sha"
+date: "10 January 2018"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+## Maths
+# wd <-"/home/zs16444/"
+# dd <-"/home/zs16444/globalmass/"
+
+## BS
+wd <- "C:/ZSwork/"
+dd <- "Z:/"
+```
+
+# Introduction
+
+In Experiment 2, we study the components in the sea surface height (SSH) equation:
+$$\mbox{SSH} =  \mbox{Ocean Floor} + \mbox{Mass} + \mbox{Steric}$$
+Eeach component in the above equation represent a yearly trend over the periond 2005 - 2015. We assume all the components are latent Gaussian spatial processes on the sphere and denote them by $X_{ssh},  X_{GIA}, X_{mass}, X_{steric}$ where we assume the Ocean floor change can be represented by GIA vertical movement. So the equation becomes
+$$
+X_{ssh} = X_{GIA} + X_{mass} + X_{steric}
+$$
+
+Then we link these processes to their corresponding observations. 
+
+1. $X_{ssh}$ is linked to the altimetry data (mm/yr, 1 degree grid)
+2. $X_{GIA}$ is assumed to be known from ice6gVM5 solution (mm/yr, vertical momvement, 1 degree grid)
+3. $X_{mass}$ is linked to GRACE data.
+    + The GRACE data are aggregated into super mascons.
+    + GRACE also observe GIA, so GIA should be removed from the observations to get mass
+    + GIA is given by ice6gVM5 solution (mm/yr, ***in water equivalence height***, 1 degree grid)
+4. We have no data for $X_{steric}$, so it will be solved by 
+$$X_{steric} = X_{ssh} - X_{mass} - X_{GIA}$$
+
+
+Step by step implementation can be found from the page <http://rpubs.com/zs_sz/Exp2a_1>. Below are summary of the results.
+
+# Results
+
+## SSH
+
+The first plot below is the predicted SSH compared to the altimetry data. The second shows the difference between the SSH and altimetry data. And the last one compares the predicted uncertainty of the SSH and the measurment error of the altimetry data.
+
+![](figs/ssh1.png) 
+
+![](figs/ssh3.png){width=90%}
+![](figs/ssh2.png)
+
+## Mass
+
+The predicted mass change and uncertainties are plotted in 1 degree resolution and Super mascon grids. 
+
+![](figs/mass1a.png){width=90%}
+
+![](figs/mass1b.png){width=90%}
+
+![](figs/mass2a.png){width=90%}
+
+![](figs/mass2b.png){width=90%}
+
+
+We also calculated the averarage mass changes.
+
+
+**Table 1: Simple average of the grid values**
+
+Domain         | Values (mm/yr)
+-------------- | ------------- 
+global         |  0.061        
+ocean          |  1.988        
+land           | -3.810       
+
+
+
+**Table 2: Weighted average of the grid values, weights = area of the grid cell**
+
+Domain         | Values (mm/yr)
+---------------| ------------- 
+global         |  0.854         
+ocean          |  1.507        
+land           | -0.653     
+
+
+
+## Steric
+
+The plots below shows the predicted steric trend and uncertainties.
+
+![](figs/steric1.png){width=90%}
+
+
+![](figs/steric2.png){width=90%}
+
+
+We also compared our steric result with 4 other studies.
+
+![](figs/steric3.png)
+
+![](figs/steric4.png)
+
+
+The difference between our steric estimate and the others are shown in the plot below.
+
+![](figs/steric5.png)

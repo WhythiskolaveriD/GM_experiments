@@ -1,0 +1,11 @@
+#!/bin/bash
+cd /./projects/GlobalMass/WP1-BHM/Experiment1b/
+for i in $(ls Data_inputs/GIA); do
+    for j in $(ls Data_inputs/GPS); do
+         echo -e "GIA_input=\"$i\"\nGPS_input=\"$j\"\n" > Data_inputs/temp_inputs.R
+         R CMD BATCH --no-save --no-restore --slave '--args infile="Data_inputs/temp_inputs.R"' ~/glbm/Experiment1b/Rscript/runINLA.R sim$i.$j.out &
+         sleep 2
+    done
+    wait;
+    echo $i
+done

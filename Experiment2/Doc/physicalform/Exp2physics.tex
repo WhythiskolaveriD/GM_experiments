@@ -1,0 +1,130 @@
+\documentclass[a4paper,12pt]{article}
+
+%%%% GIA_v4.tex : Zhe's v4.4
+%%%% Update:
+
+%% rewrite 4.1 according to notes
+
+\usepackage[tbtags]{amsmath}
+\usepackage{amsfonts,amssymb,amsthm}
+%\usepackage[width=5.75in,height=9.5in]{geometry}
+\usepackage{eucal}
+\usepackage{setspace}\doublespacing
+\usepackage{natbib}
+\usepackage{graphicx}
+\bibliographystyle{apalike}
+\usepackage{verbatim}
+\usepackage{url}
+\usepackage{lineno} 
+\usepackage{enumerate}
+\usepackage{bm}
+
+%%%% macros
+
+\usepackage{dsfont}
+\newcommand{\R}{\mathds{R}}
+\renewcommand{\SS}{\mathds{S}}
+
+\usepackage{xspace}
+\newcommand{\Matern}{Mat\'{e}rn\xspace}
+
+\newcommand{\given}{\mathbin{\vert}\nolinebreak}
+\newcommand{\ldef}{\mathrel{:=}\nolinebreak}
+\newcommand{\trans}{^{\scriptscriptstyle T}}
+\newcommand{\bzero}{\boldsymbol{0}}
+\newcommand{\rd}{\textrm{d}}
+\newcommand{\code}[1]{\texttt{#1}}
+\newcommand{\unit}[1]{\ensuremath{\,\mathrm{#1}}}
+\newcommand{\half}{\frac{1}{2}}
+\newcommand{\thalf}{\tfrac{1}{2}}
+
+\newcommand{\curlyA}{\mathcal{A}} 
+\newcommand{\curlyB}{\mathcal{B}} 
+\newcommand{\Xtilde}{\widetilde{X}}
+\newcommand{\Ytilde}{\widetilde{Y}}
+\newcommand{\ytilde}{\tilde{y}}
+\newcommand{\Ztilde}{\widetilde{Z}}
+\newcommand{\ztilde}{\tilde{z}}
+
+\DeclareMathOperator{\pr}{p}
+\DeclareMathOperator{\bigO}{O}
+\DeclareMathOperator{\E}{\mathds{E}}
+\DeclareMathOperator{\Var}{\mathds{V}}
+\DeclareMathOperator{\CV}{CV}
+\DeclareMathOperator{\diag}{diag}
+
+%% title etc
+
+\title{Experiment 2: Documentation of the Physics Models}
+
+\author{ZS, JR, RB, RW and JB}
+
+\date{Compiled \today, from \texttt{\jobname.tex}}
+
+\hyphenation{hyper-parameter hyper-parameters}
+
+\begin{document}
+
+\maketitle
+%\linenumbers
+
+In experiment 2, we analyse the change in sea surface height (SSH) over the period 2005 - 2015. For this experiment, we assume the change is a constant linear trend over the period of interest. Then the SSH change is attributed to the following components: (1) ocean mass change, (2) steric change (the density change caused by salinity and temperature), (3) vertical land motion (VLM) due to GIA and elastic response. 
+
+
+The SSH is directly measurable by altimetry data (mm/yr) at a 1 degree resolution. 
+
+The ocean mass change is seen by the GRACE satellite. The GRACE data are observed gravity change caused by changes in mass. The mass change can be thought of as  concentrated in a very thin layer of water thickness changes near the Earth's surface. Therefore the GRACE mascon data are measured in mm/yr equivalent water height (EWH). Most of the changes are due to water exchanges but GRACE also sees the mass redistribution in the solid Earth. We assume such effect mainly comes from GIA and after corrected by GIA (measured as EWH mm/yr), the GRACE mascon data can be used to measure the mass change due to water exchange only.
+
+The steric change is difficult to measure in general due to limited measurements and the ocean dynamics. Therefore, we will treat it as a residual term to be estimated.
+
+The vertical land motion reflects the change in the shape of the ocean bottom. It is mainly comes from the GIA (measured as vertical change mm/yr). It affects the SSH globally rather than locally; hence it is a constant calculated by GIA average over the ocean.
+
+
+\section{The linear model}
+We derived a pixel-wise linear representation of the SSH into the three components. 
+Denote the SSH by $h$. Then at a pixel $u$, the height can be written as
+\begin{align}
+h(u) = h_w(u) + h_l
+\end{align}
+where $h_w(u)$ is the height of the water column at the pixel $u$ and $h_l$ is average ocean bottom height that is constant in space. 
+
+Given the mass $m(u)$ and density $\rho(u)$ of the water column, then $h_w(u)$ can be represented by 
+\begin{align}
+h_w(u) = \frac{m(u)}{a(u) \rho(u)}
+\end{align} 
+where $a(u)$ is the area of the pixel.
+
+The density can be elaborated later on as a function of salinity $S$ and temperature $T$ and this gives $\rho(u) = \rho(S(u), T(u))$.
+
+If we allow these processes to change over time, then we can write
+\begin{align}
+h\left(\rho(S_t(u), T_t(u)\right), m_t(u), a(u), h_{lt}) = \frac{m_t(u)}{a(u) \rho(S_t(u), T_t(u))} + h_{lt}
+\end{align}
+where $t$ is the time index. This gives the precise pixel-wise representation of the SSH at a given time point in terms the components we are interested in .
+
+Next we write the change in SSH in terms of change in the interested components. To simplify the notation in the formula, we omit the pixel index $u$. Since we do not separate the salinity and temperature effect in this experiment, we can simplify the density function to $\rho_t$. Then for the change between time $t = 1$ and $t=2$, we have
+\begin{align}
+\Delta h & = h_2 - h_1 = h(\rho_2, m_2, a, h_{l2}) - h(\rho_1, m_1, a, h_{l1}) \\
+         & = \frac{1}{a} \left( \frac{m_2}{\rho_2} - \frac{m_1}{\rho_1}\right) + (h_{l2} - h_{l1}) \\
+         & =  \frac{1}{a} \left(\frac{\rho_1 (m_2 - m_1) + (\rho_1 - \rho_2) m_1}{\rho_1\rho_2} \right) + (h_{l2} - h_{l1})\\
+         & = \frac{1}{a} \left(\frac{m_2 - m_1}{\rho_2}  + \left(\frac{1}{\rho_2}- \frac{1}{\rho_1} \right) m_1 \right) + (h_{l2} - h_{l1})
+\end{align}
+
+The last term in the brackets of the above equation correspond to the vertical land motion which is constant in space and time and we denote it by $\overline{vlm}$ in the following. To separate the mass change and density change, we write the density as a ratio of a reference density $\rho_r = 1000kg/m^3$. Denote by $\Delta m = m_2 - m_1$ and $\Delta \rho = 1/\rho_2 - 1/\rho_1$, then the above equation can be written as
+\begin{align} \label{eq:linear1}
+\Delta h = \frac{1}{a \rho_r} \Delta m  + \frac{1}{a}\left(\Delta \rho m_1 + \left(\frac{1}{\rho_2} - \frac{1}{\rho_r}\right)\Delta m \right) + \overline{vlm}
+\end{align}
+
+In equation \eqref{eq:linear1}, the second term in the big brackets is in lower order compared to the first; therefore we can write the SSH change as 
+
+\begin{align} \label{eq:linear2}
+\Delta h \approx \frac{1}{a \rho_r} \Delta m  + \frac{m_1}{a}\Delta \rho  + \overline{vlm}
+\end{align}
+
+Thus in equation \eqref{eq:linear2} we have the linear model for the SSH. The SSH change on the left hand side can be measured directly by altimetry data. The first term  on the right hand side corresponds to the mass change in EWH and it can be observed by GRACE. The second term corresponds to the steric change which will be estimated from the residual of the linear model. The last term is the vertical land motion which is given by the GIA simulation.
+
+
+\bibliography{references,statistics,ComputerExperiment}
+
+\end{document}
+

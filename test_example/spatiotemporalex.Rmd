@@ -1,0 +1,123 @@
+---
+title: "A spatial-temporal Example"
+author: "Z Sha"
+date: "7 February 2018"
+output: 
+  html_document:
+    toc: true
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+## Math
+wd <-"/home/zs16444/coding/"
+dd <-"/home/zs16444/globalmass/"
+
+## BS
+#wd <- "C:/ZSwork/"
+#dd <- "Z:/"
+
+library(rgdal); library(sp);library(GEOmap)
+library(INLA)
+library(gstat)
+
+source(paste0(wd,"gmrcode/BHM_sphere/functions.R"))
+source(paste0(wd, "gmrcode/BHM_sphere/partition_fun.R"))
+
+```
+
+# Simulate some data from a spatio-temporal model
+
+We construct the spde covariance of a space-time separable model where we assume $\rho = 0.3, \sigma^2 = 1$ for the Matern spatial covariance function and  $r_{t} = 0.8$ for an AR(1) time-series covariance function.
+$$X_{1:t} \sim GP (0, \Sigma)\\
+\Sigma = \Sigma_S \otimes \Sigma_T$$
+We also add some Gaussian noise to this process $Y = X + e, e \sim N(0, 0.5^2)$. The following simulate data from this model.
+
+```{r simdata, cache = TRUE}
+## time and locations
+time <- 1:6
+loc <- as.matrix(expand.grid(seq(0, 3, 0.2), seq(0, 3, 0.2)))
+locdist <- as.matrix(dist(loc))
+
+## Space covariance -- sigma = 1, range = 0.3
+## Matern covariance # to be compared with inla: smoothness(nu) = alpha - d/2, d = 2 here and default in inla alpha = 2.
+Vs <- Matern(d =locdist, range = 0.3, smoothness = 1, phi = 1) 
+
+
+## Time covariance -- r = 0.8
+Vt <- diag(6) 
+Vt <- 1* 0.8^abs(row(Vt)-col(Vt))
+
+## Cross covariance
+Vc <- kronecker(Vs, Vt)
+
+## simulate the data
+set.seed(10)
+xx <- crossprod(chol(Vc), rep(rnorm(nrow(loc) * 6)))
+
+## Create the time spatial data frame
+simdf <- data.frame(x = rep(loc[,1], each = 6), y = rep(loc[,2], each = 6), 
+                    dat= xx, datn = xx + 0.5*rnorm(length(xx)), time = rep(1:6,  nrow(loc)) )
+
+## plot
+lattice::levelplot(datn~ x + y|time, data = simdf)
+
+```
+
+
+
+# Build INLA SPDE
+
+We build the SPDE model corresponding to this data model and then use INLA for Bayesian inference.
+```{r inla, cache = TRUE}
+## Select time knots and generate time mesh
+knots = seq(1, 6, length = 6)
+mesh1 = inla.mesh.1d(loc = knots, degree = 2, boundary = "free")
+
+## generate space mesh 
+locs <- unique(simdf[, c("x", "y")])
+mesh2 <- inla.mesh.2d(loc = locs, offset = c(0.1, 0.4), max.edge = 0.3 )
+
+## prior parameters
+range0 <- 0.1
+sigma0 <- 1
+lkappa0 <- log(8)/2 - log(range0)
+ltau0 <- 0.5*log(1/(4*pi)) - log(sigma0) - lkappa0
+
+## build the spatial spde
+spde <- inla.spde2.matern(mesh2, B.tau = matrix(c(ltau0, -1, 1),1,3),
+                          B.kappa = matrix(c(lkappa0, 0, -1), 1,3), 
+                          theta.prior.mean = c(0,0), theta.prior.prec = c(0.1, 1))
+
+
+## build the space time indices
+index = inla.spde.make.index("space", n.spde = spde$n.spde, n.group = mesh1$m)
+
+
+
+## Link data and process 
+A <- inla.spde.make.A(mesh2, loc = cbind(simdf$x, simdf$y), group = simdf$time, group.mesh = mesh1)
+
+stack = inla.stack(data = list(y = simdf$datn), A = list(A), effects = list(index))
+
+## the model
+formula = y ~ -1 + f(space, model = spde, group = space.group,
+                     control.group = list(model = "ar1"))
+
+
+res <- inla(formula, data=inla.stack.data(stack), 
+            control.predictor=list(compute=TRUE, A=inla.stack.A(stack)))
+
+pars <- inla.spde2.result(res, "space", spde, do.transf=TRUE)
+plot(pars$marginals.variance.nominal[[1]], type='l', ylab='Density', xlab = "variance") 
+plot(pars$marginals.range.nominal[[1]], type='l', ylab='Density', xlab = "range") 
+plot(res$marginals.hyperpar$`GroupRho for space`, type='l', ylab='Density', xlab = "ar correlation")
+plot(res$marginals.hyperpar$`Precision for the Gaussian observations`, type='l', ylab='Density', xlab = "Gaussian precision")
+
+## Plot the prediction
+idx <- inla.stack.data(stack, tag = "pred")
+preds <- res$summary.linear.predictor
+simdf$pred <- preds$mean[1:nrow(simdf)]
+lattice::levelplot(pred ~ x + y|time, data = simdf)
+```

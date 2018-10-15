@@ -1,0 +1,26 @@
+---
+title: "Pseudo Polygon Mixture model for GIA"
+author: "Z Sha"
+date: "31 October 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# 0 Introduction
+
+In this document, we test the mixture model on the globe. We use the land coastline as the boudary for the mixture Gaussian models. We assume the same Gaussian process on the land and another on the ocean.
+
+
+## 1 Define Polygons and Simulate data
+First we read in a low resolution coastline to separate the lands and oceans and then define the true process by a GMRF defined on the triangle mesh of a SPDE model.
+
+We need the following packages and extra functions from the sourced file.
+```{r init, include=TRUE, message = FALSE, warning=FALSE}
+## load libraries and source codes
+library(INLA); library(rgdal); library(maptools); library(GEOmap); library(rgl)
+source("~/glbm/Experiment1b//mixture_model/BarrierModel/functions-barriers-dt-models-march2017.R")
+set.seed(18)
+```

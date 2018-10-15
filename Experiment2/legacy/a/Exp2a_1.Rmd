@@ -1,0 +1,296 @@
+---
+title: "Experiment 2a"
+author: "Z Sha"
+date: "22 November 2017"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+## Maths
+# wd <-"/home/zs16444/"
+# dd <-"/home/zs16444/globalmass/"
+
+## BS
+wd <- "C:/ZSwork/"
+dd <- "Z:/"
+```
+
+# Introduction
+
+In this experiment, we assume the GIA is known so there will be only two independent latent process $X_{ssh}$ and $X_{mass}$ and the third one $X_{steric}$ is given by $$X_{steric} = X_{ssh} - x_{GIA} - X_{mass}$$. Here we assume the GIA is given by the ice6g soltuion and $x_{GIA}$ repersents the vertical bedrock movement and it is in the unit of mm. The GRACE data see both mass and GIA and we assume the two processes contribute to the GRACE signal as a sum $X_{mass} + X_{GIA}$. To get $X_{mass}$, we need to remove the GIA signals from the GRACE data. The GIA used to correct the GRACE observations are given in the unit of mm water equivalence height.
+
+In the following we use the same approach as in Experiment 1 to obtain the updated $X_{ssh}$ and $X_{mass}$. In this experiment we update these two processes independently. 
+
+```{r loadlibs, message = FALSE, warning = FALSE}
+library(rgdal); library(sp);library(GEOmap)
+library(INLA)
+library(ncdf4)
+source(paste0(wd,"gmrcode/BHM_sphere/functions.R"))
+source(paste0(wd, "gmrcode/BHM_sphere/partition_fun.R"))
+```
+
+# Update $X_{ssh}$
+
+First we load the altimetry data and do some exploratory analysis on the spatial property of the process.
+
+## Load data 
+
+Load the pre-processed altimetry data. The data are the yearly trend estimates over 10 years (2005-2015) and their estimated errors at one degree resolution.
+```{r alt_data}
+alt_nc <- nc_open(paste0(dd,"WP3-Ocean/BHMinputs/SSH/trend_SSH_CCI_200501_201512.nc"))
+print(alt_nc)
+lon <- ncvar_get(alt_nc, "lon")
+lat <- ncvar_get(alt_nc, "lat")
+trend_ssh <- ncvar_get(alt_nc, "trend_ssh") #note that there are NAs for land datat
+err_ssh <- ncvar_get(alt_nc, "err")
+
+alt_data <- data.frame(trend_ssh = as.numeric(trend_ssh), err_ssh = as.numeric(err_ssh))
+alt_data$lon <- rep(lon, 180) 
+alt_data$lat <- rep(lat, each = 360)
+alt_data2 <- na.omit(alt_data)
+trend_ssh2 <- ifelse(abs(alt_data2$trend_ssh) > 19, sign(alt_data2$trend_ssh)*20, alt_data2$trend_ssh)
+alt_data2$trend_ssh2 <- trend_ssh2
+err_ssh2 <- ifelse(alt_data2$err_ssh > 3, 3.5, alt_data2$err_ssh)
+alt_data2$err_ssh2 <- err_ssh2
+## Find the xyz coords of the altimetry data
+alt_loc <- do.call(cbind, Lll2xyz(lon = alt_data2$lon, lat = alt_data2$lat))
+## plot the data
+lattice::levelplot(trend_ssh2 ~ lon + lat, data = alt_data2, aspect = "iso",  at =seq(-20, 20, 4),
+                     panel = function(x,y,z,...){
+                       lattice::panel.fill(col = "grey")
+                       lattice::panel.levelplot(x,y,z,...)
+                       map2 <- map("world2", interior = FALSE, plot = FALSE)
+                       lattice::panel.xyplot(x=map2$x, y=map2$y, type = "l", col = "black")
+                     },
+                     main = "The altimetry trend (mm/yr ewh)", xlab = "longitude", ylab = "latitude")
+
+lattice::levelplot(err_ssh2 ~ lon + lat, data = alt_data2, aspect = "iso",  at = seq(0, 4, 0.5), col.regions = topo.colors(10),
+                     panel = function(x,y,z,...){
+                       lattice::panel.fill(col = "grey")
+                       lattice::panel.levelplot(x,y,z,...)
+                       map2 <- map("world2", interior = FALSE, plot = FALSE)
+                       lattice::panel.xyplot(x=map2$x, y=map2$y, type = "l", col = "black")
+                     },
+                     main = "The altimetry errors (mm/yr ewh)", xlab = "longitude", ylab = "latitude")
+```
+
+## prior set up
+
+Now we do some exploratory analysis which will be helpful in setting up the prior for hyper parameters $\rho$ and $\sigma^2$ for the SSH process. We can set up a vague prior in this preliminary study and later on set the prior to be concentrated if more information of ssh is given. We learn a sensible value for a initial mean by plotting the variogram of the the altimetry data.
+
+The following chunk plot the smoothed variogram of the altimerty trend. It takes a long time to run due to the size of the data.
+
+```{r variogram, message = FALSE}
+coordinates(alt_data2) <- c("lon", "lat")
+proj4string(alt_data2) <- CRS("+proj=longlat")
+alt_datas <- alt_data2[sample(1:nrow(alt_data2), 5000),] # thin the data otherwise it takes too long! plot remains the same
+v1 <- gstat::variogram(trend_ssh ~ 1, alt_datas) 
+plot(v1)
+```
+
+From the variogram plot, it seems the correlation length is about 3000km and the variance can be as high as 25. Hence we set the prior mean of $\rho$ to $3000/6371 \approx 0.47$ and $\sigma= 5$.
+```{r prior}
+## Priors mean and variance for the parameters: rho and sigma
+mu_r <- 3000/6371
+v_r <- 1
+mu_s <- 5
+v_s <- 10^2
+```
+
+The sea surface height is only defined on oceans so we will model this process only on the ocean. The following chunk load the low resolution global ocean polygons from NatureEarth and generate mesh with equal area triangles of approximately one degree resolution.
+
+## Generate mesh 
+
+To build the spde model used for approximating the process, we need to generate a triangular mesh for the process. In general, the triangles in the mesh should have similar size and shape and the size of the triangles should be no larger than the spatial correlation length. 
+
+In our exploratory analysis, the correlation length is quite long, therefore if the purpose is estimating the hyper-parameters, then we can choose to have a sparse mesh with resolution no large than the correlation length. Here we could use say a triangle size to have approximately 5 degree resolution so that the edge length of the triangles are smaller than 500km on average which is much smaller than 3000km. 
+
+However, Since our purpose is to produce a map of the process at high resolution, we must have a mesh with at least the desired prediction resolution. For a 1 degree resolution map, we will need about $360 \times 180 = 64800$ triangles corresponding to number of vertices of $v \approx  (f+2)*2/5= 25921$. When using the Fibonacci grid points in long lat coordinates as the starting points for generating the mesh, the number of points is about half of the triangle vertices.
+
+```{r ssh_mesh}
+## Genereate Fibonacci points on the sphere
+fibo_points <- fiboSphere(N = 12960, L0 = TRUE)
+fibo_points_xyz <- do.call(cbind, Lll2xyz(lat = fibo_points[,2], lon = fibo_points[,1]))
+mesh0 <- inla.mesh.2d(loc = fibo_points_xyz, cutoff = 0.01, max.edge = 1)
+## Make this "smoother"
+mesh0 <- inla.mesh.2d(loc = mesh0$loc, cutoff = 0.01, max.edge = 1)
+```
+
+Since the process is only defined on the ocean, we remove the mesh that are not in the modelling region. And to make sure the triangles capture the shape of the coastlines, we add extra points near the coastlines.
+```{r ssh_mesh2}
+## Load the Ocean polygon
+Ocean <- readOGR(dsn = paste0(dd, "WP1-BHM/maps/ne_110m_ocean"), layer = "ne_110m_ocean")
+plot(Ocean)
+
+## Remove mesh not in the ocean
+mesh0 <- dt.mesh.addon.posTri(mesh = mesh0, globe = TRUE) 
+Tlonlat <- Lxyz2ll(list(x = mesh0$posTri[,1], y = mesh0$posTri[,2], z = mesh0$posTri[,3]))
+mesh0$Trill <- cbind(lon = Tlonlat$lon, lat =Tlonlat$lat)
+TinOcean <- unlist(over(Ocean, SpatialPoints(coords=mesh0$Trill, proj4string = CRS(proj4string(Ocean))), returnList=T))
+TAll <- 1:mesh0$t
+ToutOcean <- TAll[-TinOcean]
+Omega = dt.Omega(list(TinOcean, 1:mesh0$t), mesh0)
+
+mesh_ssh <- mesh.sub(mesh0, Omega, 1)
+summary(mesh_ssh)
+```
+
+
+
+
+```{r spde}
+## Transform the parameters for the SPDE_GMRF approximation
+trho <- Tlognorm(mu_r, v_r)
+tsigma <- Tlognorm(mu_s, v_s)
+
+## Build the SPDE model with the prior
+lsigma0 <- tsigma[1]
+theta1_s <- tsigma[2]
+lrho0 <- trho[1]
+theta2_s <- trho[2]
+lkappa0 <- log(8)/2 - lrho0
+ltau0 <- 0.5*log(1/(4*pi)) - lsigma0 - lkappa0
+
+SSH_spde <- inla.spde2.matern(mesh_ssh, B.tau = matrix(c(ltau0, -1, 1),1,3), B.kappa = matrix(c(lkappa0, 0, -1), 1,3),
+                              theta.prior.mean = c(0,0), theta.prior.prec = c(sqrt(1/theta1_s), sqrt(1/theta2_s)))
+
+```
+
+
+
+
+
+## Link data to process
+
+Now we link the data to the process. The altimetry data is gridded with 1 degree resolution and we have a mesh with about the same resolution, so we can simply use a point to point identity map to link the data to the process: each data point observe the process from the same location.
+
+```{r link_data}
+## Link the process to observations and predictions
+A_data <- inla.spde.make.A(mesh = mesh_ssh, loc = alt_loc)
+A_pred <- inla.spde.make.A(mesh = mesh_ssh, loc = rbind(mesh_ssh$loc))
+
+## Create the estimation and prediction stack
+st.est <- inla.stack(data = list(y=alt_data2$trend_ssh), A = list(A_data),
+                     effects = list(SSH = 1:SSH_spde$n.spde), tag = "est")
+st.pred <- inla.stack(data = list(y=NA), A = list(A_pred),
+                      effects = list(SSH=1:SSH_spde$n.spde), tag = "pred")
+stSSH <- inla.stack(st.est, st.pred)
+```
+
+## INLA inference
+
+Now we can run INLA for the Bayesian inference. Do not run on a desktop the process may use up to 64GB memory at peak. We ran this on a server with enough memory.
+
+```{r inla_run, include = TRUE, eval = FALSE}
+## Fix altimetry errors as they are known
+hyper <- list(prec = list(fixed = TRUE, initial = 0))
+prec_scale <- c(1/alt_data2$err_ssh^2, rep(1, nrow(A_pred)))
+
+## The formular for modelling the SSH mean
+formula = y ~ -1 +  f(SSH, model = SSH_spde)
+
+## Run INLA
+res_inla <- inla(formula, data = inla.stack.data(stSSH, spde = SSH_spde), family = "gaussian",
+                 scale =prec_scale, control.family = list(hyper = hyper),
+                 control.predictor=list(A=inla.stack.A(stSSH), compute =TRUE))
+```
+
+## Results
+
+### Assemble and save results
+
+Now assemble the inla inference and prediction results.
+```{r inla_res, include = TRUE, eval = FALSE}
+INLA_pred <- res_inla$summary.linear.predictor
+## Extract and project predictions
+pred_idx <- inla.stack.index(stSSH, tag = "pred")$data
+
+## SSH
+SSH_m <- INLA_pred$mean[pred_idx] 
+SSH_u <- INLA_pred$sd[pred_idx]
+proj <- inla.mesh.projector(mesh_ssh, projection = "longlat", dims = c(360,180), xlim = c(0,359), ylim = c(-89.5, 89.5))
+SSH_grid <- expand.grid(proj$x, proj$y)
+SSH_pred <- data.frame(lon = SSH_grid[,1], lat = SSH_grid[,2],
+                       mean = as.vector(inla.mesh.project(proj, as.vector(SSH_m))),
+                       u = as.vector(inla.mesh.project(proj, as.vector(SSH_u))))
+
+res_SSH <- list(res_inla = res_inla, spde = SSH_spde, st = stSSH, 
+            mesh = mesh_ssh,  SSH_pred = SSH_pred)
+
+save(res_SSH, file =paste0(dd, "WP1-BHM/Experiment2a/exp2a_ssh.RData"))
+```
+
+
+### Plot the posteriors of the hyper parameters
+
+```{r hyper, include=TRUE}
+load(paste0(dd, "WP1-BHM/Experiment2a/exp2a_ssh.RData"))
+pars_SSH <- marginal_par(res = res_SSH, process = "SSH", plot = TRUE)
+## The posterior modes
+print(paste("The estimated correlation lengths are:", pars_SSH$rho_mode*6371,  sep = "  "))
+
+print(paste("The estimated marginal variances are:", pars_SSH$sigma_mode,sep = "  "))
+```
+
+
+## Plot the predictions
+
+In this experiment, it is more convenient to produce the prediction at the altimetry data directly, since they are grid points.
+We plot the predicted SSH at these locations and compare them to the altimetry data
+```{r predict, include=TRUE}
+alt_pred <- res_SSH$SSH_pred
+alt_pred$source1 <- "SSH predicted mean"
+alt_pred$source2 <- "SSH predicted uncertainty"
+alt_data$source1 <- "Altimetry trend"
+alt_data$source2 <- "Altimetry error"
+names(alt_data)[1:2] <- c("mean", "u") 
+alt_diff <- data.frame(lon = alt_pred$lon, lat = alt_pred$lat, diff = alt_pred$mean-alt_data$mean)
+alt_pred <- rbind(alt_pred, alt_data)
+
+alt_pred$mean2 <- ifelse(abs(alt_pred$mean) > 19, sign(alt_pred$mean)*20, alt_pred$mean)
+alt_pred$u2 <- ifelse(alt_pred$u > 3, 3.5, alt_pred$u)
+alt_diff$diff2 <- ifelse(abs(alt_diff$diff) > 19, sign(alt_diff$diff)*20, alt_diff$diff)
+
+## plot the mean 
+lattice::levelplot(mean ~ lon + lat | source1, data = alt_pred, aspect = "iso", at = seq(-20, 20, 2),
+                     panel = function(x,y,z,...){
+                       lattice::panel.fill(col = "grey")
+                       lattice::panel.levelplot(x,y,z,...)
+                       map2 <- map("world2", interior = FALSE, plot = FALSE)
+                       lattice::panel.xyplot(x=map2$x, y=map2$y, type = "l", col = "black")
+                     },
+                     main = "The predicted SSH trend (mm/yr ewh)", xlab = "longitude", ylab = "latitude")
+
+## plot the uncertainty
+lattice::levelplot(u ~ lon + lat | source2, data = alt_pred, aspect = "iso", at = seq(0, 4, 0.5),col.regions = topo.colors(10),
+                     panel = function(x,y,z,...){
+                       lattice::panel.fill(col = "grey")
+                       lattice::panel.levelplot(x,y,z,...)
+                       map2 <- map("world2", interior = FALSE, plot = FALSE)
+                       lattice::panel.xyplot(x=map2$x, y=map2$y, type = "l", col = "black")
+                     },
+                     main = "The predited SSH uncertainties (mm/yr ewh)", xlab = "longitude", ylab = "latitude")
+
+## Plot the differnce
+lattice::levelplot(diff ~ lon + lat, data = alt_diff, aspect = "iso", at = seq(-20, 20, 2),
+                     panel = function(x,y,z,...){
+                       lattice::panel.fill(col = "grey")
+                       lattice::panel.levelplot(x,y,z,...)
+                       map2 <- map("world2", interior = FALSE, plot = FALSE)
+                       lattice::panel.xyplot(x=map2$x, y=map2$y, type = "l", col = "black")
+                     },
+                     main = "Differnce between predicted SSH and altimetry data (mm/yr ewh)", xlab = "longitude", ylab = "latitude")
+```
+
+
+# [Update mass (old)](http://rpubs.com/zs_sz/Exp2a_2)
+
+# [Update mass (new)](http://rpubs.com/zs_sz/Exp2a_2new)
+
+# [Update steric](http://rpubs.com/zs_sz/Exp2a_3)

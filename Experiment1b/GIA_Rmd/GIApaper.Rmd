@@ -1,0 +1,288 @@
+---
+title: "GIA paper scripts and supplementary materials"
+author: "Z Sha"
+date: "26 September 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## The Bayesian data assimilation model for updating GIA using GPS data
+
+In this section, we include the code for producing the results and plots in section 4.1 of the paper. 
+
+### Initializing
+First source the functions needed for this study.
+```{r loadfun}
+source("C:/ZSwork/gmrcode/BHM_sphere/partition_fun.R")
+source("C:/ZSwork/gmrcode/BHM_sphere/functions.R")
+```
+
+Load the GIA and GPS data. 
+```{r input}
+ice6g <- read.table("Z:/WP2-SolidEarth/BHMinputs/GIA/GIA_Pel-6-VM5.txt", header = T)
+GPSV3d <- read.table("Z:/WP2-SolidEarth/BHMinputs/GPS/GPS_v04b.txt", header = T)
+```
+
+```{r input2, eval = FALSE, include = FALSE}
+ice6g <- read.table("/./projects/GlobalMass/WP2-SolidEarth/BHMinputs/GIA/GIA_Pel-6-VM5.txt", header = T)
+GPSV3d <- read.table("/./projects/GlobalMass/WP2-SolidEarth/BHMinputs/GPS/GPS_v04b.txt", header = T)
+```
+
+## Prior setup for the parameters
+Setup the priors for the parameters for the Gaussian process. Assume the prior distributions of both $\rho$ and $\sigma^2$ are log normal. The prior mean of the correlation length is set to be 500km based on expert prior opinion on the residual process and the mean for the variance is 20 which is about the range of the GIA values. The variances of both distributions are set to be large for a vague enough prior.
+```{r modsetup}
+## Priors mean and variance for the parameters: rho and sigma
+mu_r <- 500/6371
+v_r <- (1000/6371)^2
+mu_s <- 20
+v_s <- 40^2
+
+## Transform the parameters for the SPDE_GMRF approximation
+trho <- Tlognorm(mu_r, v_r)
+tsigma <- Tlognorm(mu_s, v_s)
+```
+
+## INLA estimation and prediction
+The following use more than 32GB memory and multiple cores. It takes long time to run and the actual time depends on the machine. We run this on a server with more 56 cores and 512GB memory and it takes about to complete 14 minutes the process and at peak time the process use more than 40 cores.
+```{r INLA, eval = FALSE}
+system.time(res1 <- BayesDA_GIA(GIA = ice6g, GPS = GPSV3d, trho = trho, tsigma = tsigma))
+save(res1, file = "/./projects/GlobalMass/WP1-BHM/Experiment1b/GIA_RGL/res1.RData")
+```
+
+
+```{r load_res, include=FALSE}
+## Load the results for plotting
+load("Z:/WP1-BHM/Experiment1b/GIA_RGL/res1.RData")
+```
+
+## Plot the results
+Now we plot the results of the estimated parematers and map of predictions and uncertainties. First we plot the posteriors for the parameters.
+```{r plot_pars}
+res_inla <- res1$res_inla
+GIA_spde <- res1$spde
+pars_GIA <- inla.spde2.result(res_inla, "GIA", GIA_spde, do.transf=TRUE)
+theta_mean <- pars_GIA$summary.theta$mean
+theta_sd <- pars_GIA$summary.theta$sd
+
+## Find the mode of rho and sigma^2
+lrho_mode <- pars_GIA$summary.log.range.nominal$mode
+lrho_mean <- pars_GIA$summary.log.range.nominal$mean
+lrho_sd <- pars_GIA$summary.log.range.nominal$sd
+rho_mode <- exp(lrho_mean - lrho_sd^2)
+
+lsigma_mode <- pars_GIA$summary.log.variance.nominal$mode
+lsigma_mean <- pars_GIA$summary.log.variance.nominal$mean
+lsigma_sd <- pars_GIA$summary.log.variance.nominal$sd
+sigma_mode <- exp(lsigma_mean - lsigma_sd^2)
+
+par(mfrow = c(1,2))
+plot(pars_GIA$marginals.range.nominal[[1]], type = "l",
+     main = bquote(bold(rho("mode") == .(round(rho_mode, 4))))) # The posterior from inla output
+plot(pars_GIA$marginals.variance.nominal[[1]], type = "l", xlim = c(2, 4),
+     main = bquote(bold({sigma^2}("mode") == .(round(sigma_mode, 4))))) # The posterior from inla output
+
+## The estimated correlation length is about 568km
+rho_mode*6371
+
+fp <- "/./projects/GlobalMass/WP1-BHM/Experiment1b/GIA_RGL/"
+my.dev.print(fp, "pars", "png" )
+
+
+
+```
+
+The we plot the predicted mean and uncertainties. The predictions are assembled into a dataframe for plotting with ggplot2.
+```{r predict_prepare}
+library(ggplot2)
+library(grid)
+library(gridExtra)
+
+GPS_pred <- res1$GPS_pred
+GIA_pred <- res1$GIA_pred
+```
+
+```{r pred_mean}
+## Plot the GIA prior map
+colpal <- colorRamps::matlab.like(12)
+map_prior <- map_res(data = ice6g, xname = "x_center", yname = "y_center", fillvar = "trend", 
+                     colpal = colpal,  limits = c(-7, 15), title = "Prior GIA mean field")
+
+## Plot the GIA predicted mean
+map_GIA <- map_res(data = GIA_pred, xname = "lon", yname = "lat", fillvar = "mean", 
+                   colpal = colpal,  limits = c(-7, 22), title = "Predicted GIA")
+
+## Plot the GIA difference map
+map_diff <- map_res(data = GIA_pred, xname = "lon", yname = "lat", fillvar = "diff", 
+                    colpal = colpal, limits = c(-7,22), title = "GIA difference: Updated - Prior")
+ 
+## Display
+grid.arrange(map_GIA, map_diff)
+
+#my.dev.print(fp, "GIA_mean", "png" )
+```
+
+
+Plot maps with mean and uncertainties.
+```{r mean_uncertain}
+
+
+
+
+
+#my.dev.print(fp, "mean_unce", "png" )
+
+```
+
+Plot the uncertainties only
+```{r pred_uncertainty}
+## 3 The uncertainty map 
+map_unc <- map_res(data = GIA_pred, xname = "lon", yname = "lat", fillvar = "u", 
+                    colpal = colpal, limits = c(0, 4), title = "Predicted uncertainties")
+
+map_unc
+#my.dev.print(fp, "GIA_uncertain", "png" )
+```
+
+Zoom into an area for details.
+```{r uncer_zoom}
+## Zoom in for inspecting the uncertainties and correlation length.
+## Choose the area near Greenland.
+GIA_zoom <- map_zoom(data_field = GIA_pred, data_obs = GPS_pred, 
+                     zoom_coords = list(lon = c(280, 350), lat = c(50, 90)), colpal = colpal)
+
+GIA_zoom
+#my.dev.print(fp, "zoomin_uncertain", "png" )
+
+```
+
+
+## Add in pseudo-observations
+
+Here we describe how we define the regions for adding the pseudo observations and how these observatiosn are generated.
+
+
+
+## Updating GIA using pseudo-observations
+Here we include the code for updating GIA using the pseudo-observations generated in the previous section.
+
+```{r pseudo}
+## Load from previous result with threshold 0.3
+GPSV3d_pseudo <- read.table("Z:/WP1-BHM/Experiment1b/GIA_RGL/pseudo03.txt", header = T)
+```
+
+```{r pseudo_est, eval=FALSE}
+system.time(res2 <- BayesDA_GIA(GIA = ice6g, GPS = GPSV3d_pseudo, trho = trho, tsigma = tsigma))
+save(res2, file = "/./projects/GlobalMass/WP1-BHM/Experiment1b/GIA_RGL/res2.RData")
+```
+
+```{r load_res2, include=FALSE}
+## Load the results for plotting
+load("Z:/WP1-BHM/Experiment1b/GIA_RGL/res2.RData")
+```
+
+
+## Plot the results
+Now we plot the results of the estimated parematers and map of predictions and uncertainties. First we plot the posteriors for the parameters.
+```{r plot_pars2}
+res_inla <- res2$res_inla
+GIA_spde <- res2$spde
+pars_GIA <- inla.spde2.result(res_inla, "GIA", GIA_spde, do.transf=TRUE)
+theta_mean <- pars_GIA$summary.theta$mean
+theta_sd <- pars_GIA$summary.theta$sd
+
+## Find the mode of rho and sigma^2
+lrho_mode <- pars_GIA$summary.log.range.nominal$mode
+lrho_mean <- pars_GIA$summary.log.range.nominal$mean
+lrho_sd <- pars_GIA$summary.log.range.nominal$sd
+rho_mode <- exp(lrho_mean - lrho_sd^2)
+
+lsigma_mode <- pars_GIA$summary.log.variance.nominal$mode
+lsigma_mean <- pars_GIA$summary.log.variance.nominal$mean
+lsigma_sd <- pars_GIA$summary.log.variance.nominal$sd
+sigma_mode <- exp(lsigma_mean - lsigma_sd^2)
+
+par(mfrow = c(1,2))
+plot(pars_GIA$marginals.range.nominal[[1]], type = "l",
+     main = bquote(bold(rho("mode") == .(round(rho_mode, 4))))) # The posterior from inla output
+plot(pars_GIA$marginals.variance.nominal[[1]], type = "l", xlim = c(1.3, 1.7),
+     main = bquote(bold({sigma^2}("mode") == .(round(sigma_mode, 4))))) # The posterior from inla output
+## The estimated correlation length is about 405km
+rho_mode*6371
+
+#my.dev.print(fp, "pars2", "png" )
+
+```
+
+The we plot the predicted mean and uncertainties. The predictions are assembled into a dataframe for plotting with ggplot2.
+```{r predict_prepare2}
+library(ggplot2)
+library(grid)
+library(gridExtra)
+
+GPS_pred <- res2$GPS_pred
+GIA_pred <- res2$GIA_pred
+```
+
+```{r pred_mean2}
+## Plot the GIA prior map
+colpal <- colorRamps::matlab.like(12)
+map_prior <- map_res(data = ice6g, xname = "x_center", yname = "y_center", fillvar = "trend", 
+                     colpal = colpal,  limits = c(-7, 15), title = "Prior GIA mean field")
+
+## Plot the GIA predicted mean
+map_GIA <- map_res(data = GIA_pred, xname = "lon", yname = "lat", fillvar = "mean", 
+                   colpal = colpal,  limits = c(-7, 22), title = "Predicted GIA")
+
+## Plot the GIA difference map
+map_diff <- map_res(data = GIA_pred, xname = "lon", yname = "lat", fillvar = "diff", 
+                    colpal = colpal, limits = c(-7,22), title = "GIA difference: Updated - Prior")
+ 
+## Display
+grid.arrange(map_GIA, map_diff)
+
+#my.dev.print(fp, "GIA_mean2", "png" )
+```
+
+
+Plot maps with mean and uncertainties.
+```{r mean_uncertain2}
+map_GIA2 <- map_GIA + geom_point(data=GPS_pred, aes(x=lon, y=lat), pch=19, size = GPS_pred$u,
+                                    col = "red", fill = "red", alpha=0.7) 
+
+GIA_std <- subset(GIA_pred, lon %in% seq(0, 359, 3))
+GIA_std <- subset(GIA_std, lat %in% seq(-85, 85, 3))
+
+map_GIA2 <- map_GIA2 + geom_point(data=GIA_std, aes(x=lon, y=lat), pch=19, size = GIA_std$u,
+                                  col = "blue", fill = "blue", alpha=1)
+
+map_GIA2 <- map_GIA2 + ggtitle("Predicted GIA mean and uncertaities") 
+
+map_GIA2
+
+#my.dev.print(fp, "mean_unce2", "png" )
+
+```
+
+Plot the uncertainties only
+```{r pred_uncertainty2}
+## 3 The uncertainty map 
+map_unc <- map_res(data = GIA_pred, xname = "lon", yname = "lat", fillvar = "u", 
+                    colpal = colpal, title = "Predicted uncertainties")
+
+map_unc
+#my.dev.print(fp, "GIA_uncertain2", "png" )
+```
+
+Zoom into an area for details.
+```{r uncer_zoom2}
+## Zoom in for inspecting the uncertainties and correlation length.
+## Choose the area near pseudo observations
+GIA_zoom <- map_zoom(data_field = GIA_pred, data_obs = GPS_pred, 
+                     zoom_coords = list(lon = c(200, 240), lat = c(-50, -10)), colpal = colpal)
+
+GIA_zoom
+#my.dev.print(fp, "zoomin_uncertain2", "png" )
+```

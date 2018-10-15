@@ -1,0 +1,290 @@
+---
+title: "Exp2a -- Update Steric"
+author: "Z Sha"
+date: "3 January 2018"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+## Math
+# wd <-"/home/zs16444/"
+# dd <-"/home/zs16444/globalmass/"
+
+## BS
+wd <- "C:/ZSwork/"
+dd <- "Z:/"
+
+library(rgdal); library(sp);library(GEOmap)
+library(INLA)
+library(ncdf4)
+library(gstat)
+library(raster)
+library(rasterVis)
+library(maptools)
+
+source(paste0(wd,"gmrcode/BHM_sphere/functions.R"))
+source(paste0(wd, "gmrcode/BHM_sphere/partition_fun.R"))
+
+## Genereate Fibonacci points on the sphere
+fibo_points <- fiboSphere(N = 12960, L0 = TRUE)
+fibo_points_xyz <- do.call(cbind, Lll2xyz(lat = fibo_points[,2], lon = fibo_points[,1]))
+mesh0 <- inla.mesh.2d(loc = fibo_points_xyz, cutoff = 0.01, max.edge = 1)
+## Make this "smoother"
+mesh0 <- inla.mesh.2d(loc = mesh0$loc, cutoff = 0.01, max.edge = 1)
+```
+
+# [Introduction](http://rpubs.com/zs_sz/Exp2a_1)
+
+# [Update mass (old)](http://rpubs.com/zs_sz/Exp2a_2)
+
+# [Update mass (new)](http://rpubs.com/zs_sz/Exp2a_2new)
+
+# Update $X_{steric}$
+
+In this experiment, steric can be represented by SSH, MASS and GIA. 
+$$X_{steric} = X_{SSH} - X_{MASS} - x_{GIA}$$
+Since these processes are all Gaussian, the are additive. We have 
+$$E(X_{steric} | Y_{alt}, Y_{GRACE}, X_{GIA} = x_{GIA}) = E(X_{SSH}| Y_{alt}) - E(X_{mass}|Y_{GRACE}, x_{GIA}^m) - x_{GIA}^{vlm}\\
+V(X_{steric}| Y_{alt}, Y_{GRACE}, X_{GIA} = x_{GIA}) = V(X_{SSH}| Y_{alt}) + V(X_{mass}|Y_{GRACE}, x_{GIA}^m)$$
+
+## Load updated processes and data
+```{r up_pro, echo = FALSE}
+load(paste0(dd, "WP1-BHM/Experiment2a/exp2a_ssh.RData"))
+load(paste0(dd, "WP1-BHM/Experiment2a/exp2a_M2.RData"))
+ice6g <- read.table(paste0(dd, "WP2-SolidEarth/BHMinputs/GIA/GIA_Pel-6-VM5.txt"), header = T)
+ice6g$x_center <- ifelse(ice6g$x_center < 0, ice6g$x_center+360, ice6g$x_center)
+ice6g2<- ice6g[order(ice6g$y_center,ice6g$x_center ),] # re-order the data according to the coordinates
+```
+
+## Results
+
+Now assemble the predicted mean of and uncertainty of steric at 1 degree resolution.
+```{r setric, echo = FALSE}
+steric_m <- res_SSH$SSH_pred$mean - res_M2$M_pred$mean - ice6g2$trend
+mean2 <- ifelse(abs(steric_m) > 5, sign(steric_m)*5.5, steric_m)
+steric_u <- res_SSH$SSH_pred$u + res_M2$M_pred$u
+u2 <- ifelse(steric_u > 6, 6.5, steric_u)
+steric_data <- data.frame(lon = res_SSH$SSH_pred$lon, lat = res_SSH$SSH_pred$lat, 
+                          mean = steric_m, mean2 = mean2, u = steric_u, u2=u2)
+```
+
+Plot the steric map.
+```{r plot_steric, echo=FALSE}
+lattice::levelplot(mean2 ~ lon + lat, data = steric_data, aspect = "iso",  at = seq(-6, 6, 1),
+                     panel = function(x,y,z,...){
+                       lattice::panel.fill(col = "grey")
+                       lattice::panel.levelplot(x,y,z,...)
+                       map2 <- map("world2", interior = FALSE, plot = FALSE)
+                       lattice::panel.xyplot(x=map2$x, y=map2$y, type = "l", col = "black")
+                     },
+                     main = "The predicted steric trend (mm/yr ewh)", xlab = "longitude", ylab = "latitude")
+
+lattice::levelplot(u2 ~ lon + lat, data = steric_data, aspect = "iso", at = seq(0, 7, 1), col.regions = topo.colors(10), 
+                     panel = function(x,y,z,...){
+                       lattice::panel.fill(col = "grey")
+                       lattice::panel.levelplot(x,y,z,...)
+                       map2 <- map("world2", interior = FALSE, plot = FALSE)
+                       lattice::panel.xyplot(x=map2$x, y=map2$y, type = "l", col = "black")
+                     },
+                     main = "The predicted uncertainties in steric (mm/yr ewh)", xlab = "longitude", ylab = "latitude")
+```
+
+# Compare with other steric results
+
+We compare the steric prediction with other four steric solutions.
+
+```{r load_steric, include=FALSE, echo = FALSE}
+steric_files <- system(paste("ls", paste0(dd,"WP3-Ocean/BHMinputs/steric/")), intern = TRUE)
+steric_models <- c("EN4", "IFEMER", "JAMSTEC", "SCRIPPS", "BHM")
+
+steric_read <- function(file, name){
+  filen <- paste0(dd,"WP3-Ocean/BHMinputs/steric/", file)
+  steric_nc <- nc_open(filen)
+  print(steric_nc)
+  lon <-  ncvar_get(steric_nc, "LONGITUDE")
+  lon <- ifelse(lon < 0, lon + 360, lon)
+  lon <- ifelse(lon > 360, lon - 360, lon)
+  lat <- ncvar_get(steric_nc, "LATITUDE")
+  grid <- expand.grid(lon, lat)
+  trend <- ncvar_get(steric_nc, "trend") #note that there re NAs for land datat
+  err <- ncvar_get(steric_nc, "err")
+  steric_data <- data.frame(trend = as.numeric(trend), err = as.numeric(err), 
+                            model = name, lon = grid[,1], lat = grid[,2])
+  nc_close(steric_nc)
+  return(steric_data)
+}
+
+sterics <- list()
+
+for (i in 1:4){
+  sterics[[i]] <- steric_read(steric_files[i], steric_models[i])
+}
+
+steric_all <- do.call(rbind, sterics)
+steric_bhm <- data.frame(trend = steric_data$mean, err = steric_data$u, 
+                         model = "BHM", lon = steric_data$lon, lat = steric_data$lat)
+steric_all <- rbind(steric_all, steric_bhm)
+
+
+## resample the data for comparison
+BHM_t <- raster("C:/ZSwork/experiments/Experiment2/Doc/a/BHM_steric.nc", varname = "trend")
+en4_t <- raster(paste0(dd,"WP3-Ocean/BHMinputs/steric/", steric_files[[1]]), varname = "trend")
+
+ife_nc <- nc_open(paste0(dd,"WP3-Ocean/BHMinputs/steric/", steric_files[2]))
+print(ife_nc)
+lon <- ncvar_get(ife_nc, "LONGITUDE")
+lat <- ncvar_get(ife_nc, "LATITUDE")
+trend_ife <- ncvar_get(ife_nc, "trend") #note that there are NAs for land datat
+err_ife <- ncvar_get(ife_nc, "err")
+coord <- expand.grid(lon, lat)
+ife_data <- data.frame(lon = coord[,1], lat =coord[,2], trend = as.vector(trend_ife), err = as.vector(err_ife))
+grid <- expand.grid(seq(-179, 180, 1), seq(-89, 90, 1))
+spgrid <- SpatialPoints(coords=grid)
+gridded(spgrid) <- TRUE
+sppoly <- as(spgrid, "SpatialPolygons")
+ife_grid <- over(sppoly, ife_data, fn = mean)
+ife_grid$lon <- grid[,1]
+ife_grid$lat <- grid[,2]
+ife_grid$lon <- ifelse(ife_grid$lon <0 , ife_grid$lon + 360, ife_grid$lon)
+ife_grid <- ife_grid[order(ife_grid$lat, ife_grid$lon),]
+ife_grid$diff <- ife_grid$trend - steric_data$mean
+
+sstemp <- sterics[[3]]
+sptemp <- SpatialPointsDataFrame(sstemp[, 4:5], data = sstemp[, 1:2])
+gridded(sptemp) <-TRUE
+jam_t <- raster(sptemp, layer = 1)
+
+sstemp <- sterics[[4]]
+sptemp <- SpatialPointsDataFrame(sstemp[, 4:5], data = sstemp[, 1:2])
+gridded(sptemp) <-TRUE
+scr_t <- raster(sptemp, layer = 1)
+
+
+## Project all rasters to be the same as BHM
+en4_t2 <- resample(en4_t, BHM_t)
+en4_diff <- en4_t2 - BHM_t
+
+scr_t2 <- resample(scr_t, BHM_t)
+scr_diff <- scr_t2 - BHM_t
+
+
+jam_t2 <- resample(jam_t, BHM_t)
+jam_diff <- jam_t2 - BHM_t
+
+diffs <- list(en4_diff, list(), jam_diff, scr_diff)
+
+lddif <- list()
+for (i in c(1,3,4)){
+  steric_temp <- as.data.frame(diffs[[i]], xy=TRUE)
+  steric_temp$model <- steric_models[i]
+  steric_temp <- steric_temp[order(steric_temp$y, steric_temp$x),]
+  lddif[[i]] <- steric_temp
+}
+
+lddif[[2]] <- data.frame(x = ife_grid$lon, y = ife_grid$lat, layer = ife_grid$diff, model = "IFEMER")
+steric_diff <- do.call(rbind, lddif)
+names(steric_diff) <- c("lon", "lat", "diff", "model")
+steric_diff$diff2 <- ifelse(abs(steric_diff$diff)>4, sign(steric_diff$diff)*4.5, steric_diff$diff)
+
+```
+
+Now plot and compare the mean trend.
+```{r mean_steric, echo=FALSE}
+steric_plot <- steric_all
+steric_plot$trend <- ifelse(abs(steric_plot$trend) > 5, sign(steric_plot$trend)*5.5, steric_plot$trend)
+steric_plot$err <- ifelse(steric_plot$err > 5, 7, steric_plot$err)
+
+lattice::levelplot(trend ~ lon + lat|model, data = steric_plot, aspect = "iso",  at = seq(-6, 6, 1),
+                     panel = function(x,y,z,...){
+                       lattice::panel.fill(col = "grey")
+                       lattice::panel.levelplot(x,y,z,...)
+                       map2 <- map("world2", interior = FALSE, plot = FALSE)
+                       lattice::panel.xyplot(x=map2$x, y=map2$y, type = "l", col = "black")
+                     },
+                     main = "The steric trend (mm/yr ewh)", xlab = "longitude", ylab = "latitude")
+
+lattice::levelplot(err ~ lon + lat|model, data = steric_plot, aspect = "iso", at = seq(0, 7, 1), col.regions = topo.colors(10),
+                     panel = function(x,y,z,...){
+                       lattice::panel.fill(col = "grey")
+                       lattice::panel.levelplot(x,y,z,...)
+                       map2 <- map("world2", interior = FALSE, plot = FALSE)
+                       lattice::panel.xyplot(x=map2$x, y=map2$y, type = "l", col = "black")
+                     },
+                     main = "The errors (mm/yr ewh)", xlab = "longitude", ylab = "latitude")
+
+lattice::levelplot(diff2 ~ lon + lat|model, data = steric_diff, aspect = "iso",  at = seq(-5, 5, 1),
+                     panel = function(x,y,z,...){
+                       lattice::panel.fill(col = "grey")
+                       lattice::panel.levelplot(x,y,z,...)
+                       map2 <- map("world2", interior = FALSE, plot = FALSE)
+                       lattice::panel.xyplot(x=map2$x, y=map2$y, type = "l", col = "black")
+                     },
+                     main = "Difference: other model - BHM  (mm/yr ewh)", xlab = "longitude", ylab = "latitude")
+
+```
+
+
+Finally, save the results in netCDF.
+
+```{r save, include = FALSE}
+## save steric results as a netcdf file
+
+## change format of the data
+lons <- unique(steric_data$lon)
+lats <- unique(steric_data$lat)
+mean_mat <-array(steric_data$mean, dim = c(length(lons), length(lats)))
+u_mat <- array(steric_data$u, dim = c(length(lons), length(lats)))
+d1_mat <- array(lddif[[1]]$layer, dim = c(length(lons), length(lats)))
+d2_mat <- array(lddif[[2]]$layer, dim = c(length(lons), length(lats)))
+d3_mat <- array(lddif[[3]]$layer, dim = c(length(lons), length(lats)))
+d4_mat <- array(lddif[[4]]$layer, dim = c(length(lons), length(lats)))
+
+# define dimensions
+londim <- ncdim_def("lon", "degrees_east", as.double(lons))
+latdim <- ncdim_def("lat", "degrees_north", as.double(lats))
+
+# define variables
+mean.def <- ncvar_def(name = "trend", units = "mm/yr", dim = list(londim, latdim), missval = NA, 
+                     longname="steric trend", prec = "single")
+u.def <- ncvar_def(name = "u", units = "mm/yr", dim = list(londim, latdim), missval = NA, 
+                     longname="uncertainty", prec = "single")
+
+d1.def <- ncvar_def(name = "EN", units = "mm/yr", dim = list(londim, latdim), missval = NA, 
+                     longname="diffrence from EN", prec = "single")
+
+d2.def <- ncvar_def(name = "IFEMER", units = "mm/yr", dim = list(londim, latdim), missval = NA, 
+                     longname="diffrence from IFEMER", prec = "single")
+d3.def <- ncvar_def(name = "JAMSTEC", units = "mm/yr", dim = list(londim, latdim), missval = NA, 
+                     longname= "diffrence from JAMSTEC", prec = "single")
+
+d4.def <- ncvar_def(name = "SCRIPPS", units = "mm/yr", dim = list(londim, latdim), missval = NA, 
+                     longname= "diffrence from SCRIPPS", prec = "single")
+
+# create a netCDF file 
+ncfname <- "BHM_steric.nc"
+ncout <- nc_create(ncfname, list(mean.def, u.def, d1.def, d2.def, d3.def, d4.def), force_v4 = TRUE)
+
+# put the array
+ncvar_put(ncout, mean.def, mean_mat)
+ncvar_put(ncout, u.def, u_mat)
+ncvar_put(ncout, d1.def, d1_mat)
+ncvar_put(ncout, d2.def, d2_mat)
+ncvar_put(ncout, d3.def, d3_mat)
+ncvar_put(ncout, d4.def, d4_mat)
+
+# put additional attributes into dimension and data variables
+ncatt_put(ncout, "lon", "axis", "X")  
+ncatt_put(ncout, "lat", "axis", "Y")
+
+# add global attributes
+title <- "BHM predicted steric"
+ncatt_put(ncout, 0, "title", title)
+
+# close the file, writing data to disk
+nc_close(ncout)
+```

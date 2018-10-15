@@ -1,0 +1,18 @@
+# Add any directories, files, or patterns you don't want to be tracked by version control
+*.dat
+*.RData
+*.shp
+*.csv
+*.Rhistory
+*.png
+*.nc
+*.docx
+*.doc
+wiki/
+*cache/
+*rsconnect/
+*.html
+*.aux
+*.log
+*.gz
+*~

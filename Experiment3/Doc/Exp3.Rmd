@@ -1,0 +1,94 @@
+---
+title: "Experiment 3 North America GIA"
+author: "Zhe Sha"
+date: "17 August 2018"
+output: html_document
+---
+
+```{r setup0, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, eval = FALSE)
+```
+
+## Introduction
+
+In Experiment 3, we update GIA and mass in North America using GPS and GRACE data. In this first run, we do not differentiate between mass change due to hydrology and land ice melting.
+
+### Model setting 
+
+*  mass: locally stationary GP over North America, linked to GRACE
+
+*  GIA: locally stationary GP over North America, linked to GRACE and GPS 
+
+*  Priors: GIA has prior mean from the ice-6g model
+
+### Data
+
+* GRACE masscons (GSFC/JPL/BDV's Spheric Harmonics)
+  
+    * GSFC: GRACE_trends_Oceanadded_Bramha.nc, 
+    * JPL : TBC
+    * BDV's SH : TBC
+
+* GIA correction on GRACE: rdsf\WP3-Ocean\BHMinputs\GIA\ice6g_grace_mmyr_fromSphHarBdV.txt
+
+* hydrology and land ice mask : TBC, not used in this prelim experiment.
+
+
+Before running R on the server, make sure you have loaded the gdal module by  ``module load /opt/modulefiles/gdal-2.2.3-x86_64``
+
+Then run R and do the following setups and set the experiment name.
+
+```{r setup}
+wd_root <- "~/GM_experiments/" # this is the experiments folder path
+wd_script <- "~/GM_experiments/Experiment3/Rscript/" # this is where the Rscripts are
+dd_root <- "/./projects/GlobalMass/" # this is where you have the rdsf path
+dd_save <- "/./projects/GlobalMass/WP1-BHM/Experiment3/" # This is where you save the results
+ 
+library(rgdal); library(sp);library(GEOmap)
+library(INLA)
+library(ncdf4)
+source(paste0(wd_root,"gmrcode/BHM_sphere/functions.R"))
+source(paste0(wd_root, "gmrcode/BHM_sphere/partition_fun.R"))
+
+expname <- filename <- "Exp3"
+```
+
+
+## Load Data
+
+First we process the data. This includes load the GPS and GRACE data, and draw the North America map.
+
+```{r data}
+source(paste0(wd_script, "preprocessing/", expname, "_data.R"))
+```
+
+## Generate the mesh and data processing
+
+```{r mesh}
+source(paste0(wd_script, "preprocessing/", expname, "_meshdata.R"))
+```
+
+
+## Build SPDEs and stacks
+
+Build the SPDEs for the lantent processes: GIA and mass. We assume GIA and mass are locally stationary GP within our study region. Then build inla stacks to link the spdes to data.
+
+```{r SPDEstks}
+source(paste0(wd_script, "run_model/", expname, "_SPDEstks.R"))
+```
+
+
+## Run INLA
+
+Specify the formular and the precision matrix of the observations.
+
+```{r runinla}
+source(paste0(wd_script, "run_model/", expname, "_runinla.R"))
+```
+
+
+## Assemble and save the results
+
+```{r results}
+source(paste0(wd_script, "analyze_result/", expname, "_res.R"))
+```
