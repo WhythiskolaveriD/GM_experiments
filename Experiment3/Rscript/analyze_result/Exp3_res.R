@@ -23,7 +23,7 @@ INLA_GIA <- res_inla$summary.random$GIA
 ## mass
 mass_mean <- INLA_mass$mean
 mass_u <- INLA_mass$sd
-proj <- inla.mesh.projector(mesh0, projection = "longlat", xlim = c(172, 328), ylim = c(-3, 89))
+proj <- inla.mesh.projector(mesh0, projection = "longlat", xlim = c(172, 328), ylim = c(-3.5, 89.5),dims = c(157,94))
 mass_grid <- expand.grid(proj$x, proj$y)
 mass_pred <- data.frame(lon = mass_grid[,1], lat = mass_grid[,2],
                         mean = as.vector(inla.mesh.project(proj, as.vector(mass_mean))),
