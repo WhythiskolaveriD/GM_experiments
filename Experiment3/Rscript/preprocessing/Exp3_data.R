@@ -10,7 +10,7 @@ if(file.exists(datamap)){
   GPS <- read.table(paste0(dd_root,"WP2-SolidEarth/BHMinputs/GPS/GPS_v04b_NorthAmerica.txt"), header = T)
   coordinates(GPS) <- c("lon", "lat")
   ## The GSFC GRACE masscon data
-  grace_nc <- nc_open(paste0(dd_root, "WP2-SolidEarth/Bramha/BHMinput/GRACE_trends_JPLRL06.nc"))
+  grace_nc <- nc_open(paste0(dd_root, "WP2-SolidEarth/Bramha/BHMinput/GRACE_VCDtrends_JPLRL06.nc"))
   print(grace_nc)
   lon <- ncvar_get(grace_nc, "Long")
   lat <- ncvar_get(grace_nc, "Lat")
