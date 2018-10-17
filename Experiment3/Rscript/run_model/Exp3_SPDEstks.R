@@ -3,8 +3,8 @@
 
 ## Priors for the hyperparameters
 ## -- mass
-mass_rho <- 700/6371
-mass_sigma <- 20
+mass_rho <- 500/6371
+mass_sigma <- 2
 lsig_massm <- log(mass_sigma)
 lrho_massm <- log(mass_rho)
 lkap_mass <- log(8)/2 - lrho_massm
@@ -36,16 +36,17 @@ ygrace <- grace_northA$detrend
 grace_loc <- do.call(cbind, GEOmap::Lll2xyz(lat = grace_northA@coords[,2], lon = grace_northA@coords[,1]))
 
 A_grace2Mass <- inla.spde.make.A(mesh = mesh0, loc = grace_loc)
-A_grace2Gia <- inla.spde.make.A(mesh = mesh0, loc = grace_loc)
-stk_grace <- inla.stack(data = list(y=ygrace), A = list(A_grace2Mass,  A_grace2Gia),
-                        effects = list(list(mass = 1:mass_spde$n.spde),
-                                       list(GIA = 1:gia_spde$n.spde)), tag = "grace")
+#A_grace2Gia <- inla.spde.make.A(mesh = mesh0, loc = grace_loc)
+stk_grace <- inla.stack(data = list(y=ygrace), A = list(A_grace2Mass),
+                        effects = list(list(GIA = 1:gia_spde$n.spde)), tag = "grace")
 
 ## Link GPS
 yGPS <-GPS$detrend
 GPS_loc <- do.call(cbind, GEOmap::Lll2xyz(lat = GPS@coords[,2], lon = GPS@coords[,1]))
+
+A_GPS2Mass <- inla.spde.make.A(mesh = mesh0, loc = GPS_loc)
 A_GPS2Gia <- inla.spde.make.A(mesh = mesh0, loc = GPS_loc)
-stk_GPS <- inla.stack(data = list(y=yGPS), A = list(A_GPS2Gia),
-                      effects = list(list(GIA = 1:gia_spde$n.spde)), tag = "GIA")
+stk_GPS <- inla.stack(data = list(y=yGPS), A = list(A_GPS2Gia,  A_GPS2Gia),
+                      effects = list(list(GIA = 1:gia_spde$n.spde), list(mass = 1:mass_spde$n.spde)), tag = "GIA")
 
 stkall <- inla.stack(stk_grace, stk_GPS)
