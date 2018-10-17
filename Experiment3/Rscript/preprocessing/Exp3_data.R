@@ -21,7 +21,7 @@ if(file.exists(datamap)){
   coordinates(grace_raw) <- c("lon", "lat")
   
   ## The ice6g GIA solution
-  gia_ewh <- read.table(paste0(dd_root, "WP2-SolidEarth/BHMinputs/GIA/gia_ICE6G_vcd.txt"), sep = "", skip = 1)
+  gia_ewh <- read.table(paste0(dd_root, "WP2-SolidEarth/BHMinputs/GIA/gia_ICE6G_vcd.txt"), sep = ";", skip = 1)
   names(gia_ewh) <- c("lon", "lat", "trend")
   gia_ewh$lon <- ifelse(gia_ewh$lon < 0, gia_ewh$lon + 360, gia_ewh$lon)
   gia_ewh$error <- abs(0.2*gia_ewh$trend) # assume the errors are 20% of the gia trend
