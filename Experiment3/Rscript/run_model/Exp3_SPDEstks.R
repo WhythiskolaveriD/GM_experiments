@@ -46,7 +46,7 @@ GPS_loc <- do.call(cbind, GEOmap::Lll2xyz(lat = GPS@coords[,2], lon = GPS@coords
 
 A_GPS2Mass <- inla.spde.make.A(mesh = mesh0, loc = GPS_loc)
 A_GPS2Gia <- inla.spde.make.A(mesh = mesh0, loc = GPS_loc)
-stk_GPS <- inla.stack(data = list(y=yGPS), A = list(A_GPS2Gia,  A_GPS2Gia),
+stk_GPS <- inla.stack(data = list(y=yGPS), A = list(A_GPS2Gia,  A_GPS2Mass),
                       effects = list(list(GIA = 1:gia_spde$n.spde), list(mass = 1:mass_spde$n.spde)), tag = "GIA")
 
 stkall <- inla.stack(stk_grace, stk_GPS)
