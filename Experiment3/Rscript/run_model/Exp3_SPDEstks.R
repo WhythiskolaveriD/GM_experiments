@@ -38,7 +38,7 @@ grace_loc <- do.call(cbind, GEOmap::Lll2xyz(lat = grace_northA@coords[,2], lon =
 A_grace2Mass <- inla.spde.make.A(mesh = mesh0, loc = grace_loc)
 #A_grace2Gia <- inla.spde.make.A(mesh = mesh0, loc = grace_loc)
 stk_grace <- inla.stack(data = list(y=ygrace), A = list(A_grace2Mass),
-                        effects = list(list(GIA = 1:gia_spde$n.spde)), tag = "grace")
+                        effects = list(list(mass = 1:mass_spde$n.spde)), tag = "grace")
 
 ## Link GPS
 yGPS <-GPS$detrend
